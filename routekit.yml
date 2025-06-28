@@ -1,0 +1,23 @@
+version: 1
+services:
+  - name: user-service
+    url: http://localhost:8081/mcp
+    # schemaPath: ./services/user-service/routekit.yml
+  - name: inventory-service
+    url: http://localhost:8082/mcp
+    # schemaPath: ./services/inventory-service/routekit.yml
+  - name: crm-service
+    url: http://localhost:8083/mcp
+    # schemaPath: ./services/crm-service/routekit.yml
+  - name: kb-service
+    url: http://localhost:8084/mcp
+    # schemaPath: ./services/kb-service/routekit.yml
+  - name: devops-service
+    url: http://localhost:8085/mcp
+    # schemaPath: ./services/devops-service/routekit.yml
+  - name: support-service
+    url: http://localhost:8086/mcp
+    # schemaPath: ./services/support-service/routekit.yml
+  - name: bug-tracker-service
+    url: http://localhost:8087/mcp
+    # schemaPath: ./services/bug-tracker-service/routekit.yml

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -75,10 +76,14 @@ func (gw *GatewayServer) discoverAndRegisterTools(ctx context.Context) error {
 			}
 
 			log.Printf("Gateway: Discovered %d tools from %q at %s", len(tools.Tools), s.Name, s.URL)
-			gw.registry.RegisterCapabilities(s.URL, tools.Tools)
+			gw.registry.RegisterCapabilities(s.Name, s.URL, tools.Tools)
 
 			for _, tool := range tools.Tools {
-				gw.mcpServer.AddTool(tool, gw.routeToolCall)
+				namespacedTool := tool
+				namespacedTool.Name = fmt.Sprintf("%s__%s", s.Name, tool.Name)
+				namespacedTool.Description = fmt.Sprintf("[%s] %s", s.Name, tool.Description)
+
+				gw.mcpServer.AddTool(namespacedTool, gw.routeToolCall)
 				log.Printf("Gateway: Registered tool %q from %q at %s", tool.Name, s.Name, s.URL)
 			}
 		}(service)
@@ -90,19 +95,19 @@ func (gw *GatewayServer) discoverAndRegisterTools(ctx context.Context) error {
 }
 
 func (gw *GatewayServer) routeToolCall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	capabilityName := req.Params.Name
-	log.Printf("Gateway: Routing tool call %q", capabilityName)
+	fullyQualifiedName := req.Params.Name
+	log.Printf("Gateway: Routing tool call %q", fullyQualifiedName)
 
-	targetURL, found := gw.registry.Resolve(capabilityName)
+	targetURL, found := gw.registry.Resolve(fullyQualifiedName)
 	if !found {
-		log.Printf("Gateway: Capability %q not found in registry", capabilityName)
-		return mcp.NewToolResultError(fmt.Sprintf("unknown capability: %s", capabilityName)), nil
+		log.Printf("Gateway: Capability %q not found in registry", fullyQualifiedName)
+		return mcp.NewToolResultError(fmt.Sprintf("unknown capability: %s", fullyQualifiedName)), nil
 	}
-	log.Printf("Gateway: Routing tool call %q to %s", capabilityName, targetURL)
+	log.Printf("Gateway: Routing tool call %q to %s", fullyQualifiedName, targetURL)
 
 	downstreamClient, err := client.NewStreamableHttpClient(targetURL)
 	if err != nil {
-		log.Printf("Gateway: ERROR - Failed to create client for %q at %s: %v", capabilityName, targetURL, err)
+		log.Printf("Gateway: ERROR - Failed to create client for %q at %s: %v", fullyQualifiedName, targetURL, err)
 		return mcp.NewToolResultError("internal routing error"), nil
 	}
 	defer downstreamClient.Close()
@@ -119,12 +124,16 @@ func (gw *GatewayServer) routeToolCall(ctx context.Context, req mcp.CallToolRequ
 		},
 	})
 	if err != nil {
-		log.Printf("Gateway: ERROR - Failed to intialize connection to %q at %s: %v", capabilityName, targetURL, err)
+		log.Printf("Gateway: ERROR - Failed to intialize connection to %q at %s: %v", fullyQualifiedName, targetURL, err)
 		return mcp.NewToolResultError("internal routing error: failed to connect to downstream service"), nil
 	}
 
+	originalToolName := strings.SplitN(fullyQualifiedName, "__", 2)[1]
+	forwardReq := req
+	forwardReq.Params.Name = originalToolName
+
 	log.Printf("Gateway: Forwarding request to downstream server...")
-	result, err := downstreamClient.CallTool(ctx, req)
+	result, err := downstreamClient.CallTool(ctx, forwardReq)
 	if err != nil {
 		log.Printf("Gateway: ERROR - Downstream call failed: %v", err)
 		return mcp.NewToolResultError("downstream service failed"), nil
