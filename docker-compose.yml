@@ -1,0 +1,20 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: routekit_db
+    environment:
+      - POSTGRES_DB=routekit
+      - POSTGRES_USER=routekit
+      - POSTGRES_PASSWORD=routekit
+    ports:
+      - "5433:5432"
+    volumes:
+      - routekit-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U routekit -d routekit"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  routekit-db-data:
