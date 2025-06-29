@@ -159,16 +159,6 @@ func (r *Registry) SearchCapabilities(ctx context.Context, query string) ([]mcp.
 	return results, nil
 }
 
-func (r *Registry) Resolve(ctx context.Context, fqn string) (string, bool) {
-	var targetURL string
-	err := r.db.QueryRow(ctx, "SELECT target_url FROM capabilities WHERE fqn = $1", fqn).Scan(&targetURL)
-	if err != nil {
-		// pgx.ErrNoRows is expected when not found
-		return "", false
-	}
-	return targetURL, true
-}
-
 func (r *Registry) GetAllCapabilities(ctx context.Context) ([]mcp.Tool, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT fqn, service_name, description, input_schema
@@ -207,4 +197,14 @@ func (r *Registry) GetAllCapabilities(ctx context.Context) ([]mcp.Tool, error) {
 	}
 
 	return results, nil
+}
+
+func (r *Registry) Resolve(ctx context.Context, fqn string) (string, bool) {
+	var targetURL string
+	err := r.db.QueryRow(ctx, "SELECT target_url FROM capabilities WHERE fqn = $1", fqn).Scan(&targetURL)
+	if err != nil {
+		// pgx.ErrNoRows is expected when not found
+		return "", false
+	}
+	return targetURL, true
 }

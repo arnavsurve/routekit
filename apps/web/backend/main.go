@@ -164,6 +164,10 @@ func (h *sessionHandler) executeTools(ctx context.Context, blocks []anthropic.To
 		var args map[string]any
 		if err := json.Unmarshal(block.Input, &args); err != nil {
 			log.Printf("Error parsing tool args: %v", err)
+
+			errorMsg := fmt.Sprintf("[System Error] Failed to arguments for tool %s: %v", block.Name, err)
+			ws.WriteMessage(websocket.TextMessage, []byte(errorMsg))
+
 			toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, fmt.Sprintf("Error: could not parse arguments: %v", err), true))
 			continue
 		}
@@ -178,6 +182,8 @@ func (h *sessionHandler) executeTools(ctx context.Context, blocks []anthropic.To
 		if err != nil {
 			resultText = fmt.Sprintf("Gateway call failed: %v", err)
 			isError = true
+			errorMsg := fmt.Sprintf("[System Error] %s", resultText)
+			ws.WriteMessage(websocket.TextMessage, []byte(errorMsg))
 		} else if result.IsError {
 			if len(result.Content) > 0 {
 				if tc, ok := result.Content[0].(mcp.TextContent); ok {
@@ -185,6 +191,8 @@ func (h *sessionHandler) executeTools(ctx context.Context, blocks []anthropic.To
 				}
 			}
 			isError = true
+			errorMsg := fmt.Sprintf("[System Error] Tool %s failed: %s", block.Name, resultText)
+			ws.WriteMessage(websocket.TextMessage, []byte(errorMsg))
 		} else {
 			if len(result.Content) > 0 {
 				if tc, ok := result.Content[0].(mcp.TextContent); ok {
@@ -222,11 +230,12 @@ func getMetaToolsDefinition() []anthropic.ToolUnionParam {
 			Type: "object",
 			Properties: map[string]any{
 				"tool_name": map[string]any{
-					"type": "string",
+					"type":        "string",
+					"description": "The full namespaced name of the tool to execute, e.g., 'devops-service__get_service_health'.",
 				},
 				"tool_args": map[string]any{
 					"type":                 "object",
-					"properties":           map[string]any{},
+					"description":          "A JSON object containing the arguments for the tool.",
 					"additionalProperties": true,
 				},
 			},

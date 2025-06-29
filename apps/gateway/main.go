@@ -16,9 +16,8 @@ import (
 )
 
 type GatewayServer struct {
-	mcpServer   *server.MCPServer
-	registry    *registry.Registry
-	clientCache sync.Map
+	mcpServer *server.MCPServer
+	registry  *registry.Registry
 }
 
 func NewGatewayServer() *GatewayServer {
@@ -65,13 +64,14 @@ func (gw *GatewayServer) discoverAndRegisterTools(ctx context.Context) error {
 
 			downstreamClient, err := gw.getDownstreamClient(s.URL)
 			if err != nil {
-				log.Printf("Gateway: ERROR - Failed to create downstream client for %q at %s: %v", s.Name, s.URL, err)
+				log.Printf("Gateway: ERROR connecting to %s: %v", s.Name, err)
 				return
 			}
+			defer downstreamClient.Close()
 
 			tools, err := downstreamClient.ListTools(ctx, mcp.ListToolsRequest{})
 			if err != nil {
-				log.Printf("Gateway: ERROR - Failed to list tools from %q at %s: %v", s.Name, s.URL, err)
+				log.Printf("Gateway: ERROR listing tools from %s: %v", s.Name, err)
 				return
 			}
 			gw.registry.RegisterCapabilities(ctx, s.Name, s.URL, tools.Tools)
@@ -101,9 +101,37 @@ func (gw *GatewayServer) getDownstreamClient(targetURL string) (*client.Client, 
 		}{ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION},
 	})
 	if err != nil {
+		c.Close()
 		return nil, fmt.Errorf("failed to initialize connection: %w", err)
 	}
 	return c, nil
+}
+
+func (gw *GatewayServer) routeToolCall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	fqn := req.Params.Name
+
+	targetURL, found := gw.registry.Resolve(ctx, fqn)
+	if !found {
+		return mcp.NewToolResultError(fmt.Sprintf("internal routing error: tool %q has no registered target URL", fqn)), nil
+	}
+
+	downstreamClient, err := gw.getDownstreamClient(targetURL)
+	if err != nil {
+		log.Printf("Gateway: ERROR - Failed to create client for %q at %s: %v", fqn, targetURL, err)
+		return mcp.NewToolResultError("internal routing error: " + err.Error()), nil
+	}
+	defer downstreamClient.Close()
+
+	nameParts := strings.SplitN(fqn, "__", 2)
+	if len(nameParts) != 2 {
+		return mcp.NewToolResultError(fmt.Sprintf("internal routing error: invalid tool name format: %s", fqn)), nil
+	}
+
+	downstreamReq := req
+	downstreamReq.Params.Name = nameParts[1]
+
+	log.Printf("Gateway: Forwarding call for %q to %s", downstreamReq.Params.Name, targetURL)
+	return downstreamClient.CallTool(ctx, downstreamReq)
 }
 
 func (gw *GatewayServer) handleSearchTools(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -168,14 +196,7 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 	downstreamReq.Params.Arguments = args
 
 	log.Printf("Gateway: Forwarding request for tool %q to downstream service...", downstreamReq.Params.Name)
-	result, err := downstreamClient.CallTool(ctx, downstreamReq)
-	if err != nil {
-		log.Printf("Gateway: ERROR - Downstream call failed: %v", err)
-		return mcp.NewToolResultError("downstream service failed to execute the tool: " + err.Error()), nil
-	}
-
-	log.Printf("Gateway: Received result from downstream. Returning to agent.")
-	return result, nil
+	return downstreamClient.CallTool(ctx, downstreamReq)
 }
 
 func main() {
