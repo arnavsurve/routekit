@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Routekit - Settings</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 0;
+            border-bottom: 1px solid #eaeaea;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .nav {
+            background-color: #f8f9fa;
+            padding: 15px 0;
+            border-bottom: 1px solid #eaeaea;
+        }
+        .nav ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: flex;
+        }
+        .nav li {
+            margin-right: 20px;
+        }
+        .nav a {
+            text-decoration: none;
+            color: #333;
+            font-weight: 500;
+            padding: 5px 0;
+        }
+        .nav a:hover {
+            color: #007bff;
+        }
+        .nav a.active {
+            color: #007bff;
+            border-bottom: 2px solid #007bff;
+        }
+        .sidebar {
+            width: 250px;
+            padding-right: 30px;
+        }
+        .sidebar ul {
+            list-style: none;
+            padding: 0;
+        }
+        .sidebar li {
+            margin-bottom: 10px;
+        }
+        .sidebar a {
+            display: block;
+            padding: 10px;
+            text-decoration: none;
+            color: #333;
+            border-radius: 5px;
+        }
+        .sidebar a:hover {
+            background-color: #f8f9fa;
+        }
+        .sidebar a.active {
+            background-color: #e9ecef;
+            font-weight: 500;
+        }
+        .content {
+            display: flex;
+        }
+        .main-content {
+            flex: 1;
+        }
+        .card {
+            border: 1px solid #eaeaea;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            background-color: white;
+        }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .card-header h2 {
+            margin: 0;
+            font-size: 18px;
+        }
+        .btn {
+            display: inline-block;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            text-decoration: none;
+        }
+        .btn:hover {
+            background-color: #0069d9;
+        }
+        .btn-secondary {
+            background-color: #6c757d;
+        }
+        .btn-secondary:hover {
+            background-color: #5a6268;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+        .form-control {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .form-control:focus {
+            border-color: #80bdff;
+            outline: 0;
+            box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+        .modal-content {
+            background-color: white;
+            margin: 10% auto;
+            padding: 20px;
+            border-radius: 8px;
+            width: 500px;
+            max-width: 90%;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .modal-header h3 {
+            margin: 0;
+        }
+        .close {
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .close:hover {
+            color: #007bff;
+        }
+        .connector-status {
+            display: flex;
+            align-items: center;
+            margin-top: 10px;
+        }
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-connected {
+            background-color: #28a745;
+        }
+        .status-disconnected {
+            background-color: #dc3545;
+        }
+        .connector-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 0;
+            border-bottom: 1px solid #eaeaea;
+        }
+        .connector-info:last-child {
+            border-bottom: none;
+        }
+        .connector-details {
+            flex: 1;
+        }
+        .connector-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="nav">
+        <div class="container">
+            <ul>
+                <li><a href="/">Home</a></li>
+                <li><a href="/settings.html" class="active">Settings</a></li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="header">
+            <h1>Settings</h1>
+        </div>
+
+        <div class="content">
+            <div class="sidebar">
+                <ul>
+                    <li><a href="#" class="active" data-section="connectors">Connectors</a></li>
+                    <li><a href="#" data-section="profile">Profile</a></li>
+                    <li><a href="#" data-section="preferences">Preferences</a></li>
+                </ul>
+            </div>
+
+            <div class="main-content">
+                <!-- Connectors Section -->
+                <div id="connectors-section" class="settings-section">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2>Connected Services</h2>
+                        </div>
+                        <div id="github-connection-status">
+                            <!-- This will be populated by JavaScript -->
+                        </div>
+                        <div class="connector-actions" style="margin-top: 20px;">
+                            <button id="connect-github-btn" class="btn">Connect GitHub</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Other sections (hidden by default) -->
+                <div id="profile-section" class="settings-section hidden">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2>Profile Settings</h2>
+                        </div>
+                        <p>Profile settings will be available soon.</p>
+                    </div>
+                </div>
+
+                <div id="preferences-section" class="settings-section hidden">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2>Preferences</h2>
+                        </div>
+                        <p>Preference settings will be available soon.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- GitHub Connection Modal -->
+    <div id="github-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Connect GitHub</h3>
+                <span class="close">&times;</span>
+            </div>
+            <form id="github-form">
+                <div class="form-group">
+                    <label for="github-pat">GitHub Personal Access Token (PAT)</label>
+                    <input type="password" id="github-pat" class="form-control" required>
+                    <small>Enter your GitHub Personal Access Token. You can create one in your <a href="https://github.com/settings/personal-access-tokens" target="_blank">GitHub Settings</a>.</small>
+                </div>
+                <div class="form-group">
+                    <button type="submit" class="btn">Connect</button>
+                    <button type="button" class="btn btn-secondary" id="cancel-github">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // DOM Elements
+        const connectGitHubBtn = document.getElementById('connect-github-btn');
+        const githubModal = document.getElementById('github-modal');
+        const closeModal = document.querySelector('.close');
+        const cancelGitHub = document.getElementById('cancel-github');
+        const githubForm = document.getElementById('github-form');
+        const githubConnectionStatus = document.getElementById('github-connection-status');
+        const sidebarLinks = document.querySelectorAll('.sidebar a');
+        const settingsSections = document.querySelectorAll('.settings-section');
+
+        // Check if GitHub is connected
+        async function checkGitHubConnection() {
+            try {
+                const response = await fetch(`/api/connectors/status`);
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Failed to get status');
+                const isConnected = data.github_connected;
+                updateConnectionUI(isConnected);
+            } catch (error) {
+                console.error('Error checking GitHub connection:', error);
+                updateConnectionUI(false);
+            }
+        }
+
+        function updateConnectionUI(isConnected) {
+            if (isConnected) {
+                githubConnectionStatus.innerHTML = `
+                <div class="connector-info">
+                    <div class="connector-details">
+                        <h3>GitHub</h3>
+                        <div class="connector-status">
+                            <div class="status-indicator status-connected"></div>
+                            <span>Connected</span>
+                        </div>
+                    </div>
+                    <div class="connector-actions">
+                        <button class="btn btn-secondary" id="disconnect-github">Disconnect</button>
+                    </div>
+                </div>
+                `;
+                document.getElementById('disconnect-github').addEventListener('click', disconnectGitHub);
+                connectGitHubBtn.textContent = 'Reconnect GitHub';
+            } else {
+                githubConnectionStatus.innerHTML = `
+                <div class="connector-info">
+                    <div class="connector-details">
+                        <h3>GitHub</h3>
+                        <div class="connector-status">
+                            <div class="status-indicator status-disconnected"></div>
+                            <span>Disconnected</span>
+                        </div>
+                    </div>
+                    <div class="connector-actions">
+                        <button class="btn btn-primary" id="connect-github">Connect</button>
+                    </div>
+                </div>
+                `;
+                connectGitHubBtn.textContent = 'Connect GitHub';
+            }
+        }
+
+        // Connect GitHub
+        async function connectGitHub(event) {
+            event.preventDefault();
+            const githubPat = document.getElementById('github-pat').value;
+            if (!githubPat) {
+                alert('Please enter your GitHub Personal Access Token');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/connectors/github', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: githubPat })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Connection failed');
+                
+                githubModal.style.display = 'none';
+                checkGitHubConnection();
+                githubForm.reset();
+
+            } catch (error) {
+                alert('Failed to connect GitHub: ' + error.message);
+            }
+        }
+
+        // Disconnect GitHub
+        async function disconnectGitHub() {
+            if (!confirm('Are you sure you want to disconnect your GitHub account?')) return;
+            try {
+                const response = await fetch('/api/connectors/github', { method: 'DELETE' });
+                 const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Disconnection failed');
+
+                checkGitHubConnection();
+
+            } catch (error) {
+                alert('Failed to disconnect GitHub: ' + error.message);
+            }
+        }
+
+        // Switch between settings sections
+        function switchSection(sectionId) {
+            settingsSections.forEach(section => {
+                section.classList.add('hidden');
+            });
+            
+            document.getElementById(`${sectionId}-section`).classList.remove('hidden');
+            
+            sidebarLinks.forEach(link => {
+                link.classList.remove('active');
+                if (link.dataset.section === sectionId) {
+                    link.classList.add('active');
+                }
+            });
+        }
+
+        // Event Listeners
+        connectGitHubBtn.addEventListener('click', () => {
+            githubModal.style.display = 'block';
+        });
+
+        closeModal.addEventListener('click', () => {
+            githubModal.style.display = 'none';
+        });
+
+        cancelGitHub.addEventListener('click', () => {
+            githubModal.style.display = 'none';
+        });
+
+        githubForm.addEventListener('submit', connectGitHub);
+
+        sidebarLinks.forEach(link => {
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                switchSection(link.dataset.section);
+            });
+        });
+
+        // Close modal when clicking outside
+        window.addEventListener('click', (e) => {
+            if (e.target === githubModal) {
+                githubModal.style.display = 'none';
+            }
+        });
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            checkGitHubConnection();
+        });
+    </script>
+</body>
+</html>

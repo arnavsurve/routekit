@@ -26,12 +26,7 @@ type Registry struct {
 	services     []Service
 }
 
-func New() *Registry {
-	dbpool, err := pgxpool.New(context.Background(), DSN)
-	if err != nil {
-		log.Fatalf("Registry: Failed to connect to database: %v\n", err)
-	}
-
+func New(dbPool *pgxpool.Pool) *Registry {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		log.Fatalf("Registry: OPENAI_API_KEY environment variable is not set.\n")
@@ -43,10 +38,11 @@ func New() *Registry {
 		{Name: "devops-service", URL: "http://localhost:8085/mcp"},
 		{Name: "support-service", URL: "http://localhost:8086/mcp"},
 		{Name: "bug-tracker-service", URL: "http://localhost:8087/mcp"},
+		{Name: "github", URL: "https://api.githubcopilot.com/mcp/"},
 	}
 
 	return &Registry{
-		db:           dbpool,
+		db:           dbPool,
 		openaiClient: openai.NewClient(apiKey),
 		services:     services,
 	}

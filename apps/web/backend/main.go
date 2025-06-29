@@ -11,22 +11,85 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/arnavsurve/routekit/pkg/crypto"
+	"github.com/arnavsurve/routekit/pkg/db"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
+	"golang.org/x/crypto/bcrypt"
 )
+
+type App struct {
+	dbPool    *pgxpool.Pool
+	jwtSecret []byte
+}
 
 const gatewayURL = "http://localhost:8080/mcp"
 
 var upgrader = websocket.Upgrader{}
 
+const jwtExpirationHours = 24
+
+func main() {
+	if err := godotenv.Load(); err != nil {
+		log.Fatalf("Failed to load environment variables: %v\n", err)
+	}
+
+	db.Init()
+	defer db.Close()
+	crypto.Init()
+
+	jwtSecret := []byte(os.Getenv("JWT_SECRET"))
+	if len(jwtSecret) == 0 {
+		log.Fatalf("JWT_SECRET environment variable not set.")
+	}
+
+	app := &App{
+		dbPool:    db.GetPool(),
+		jwtSecret: jwtSecret,
+	}
+
+	e := echo.New()
+	e.Use(middleware.Logger())
+	e.Use(middleware.Recover())
+
+	e.Static("/", "public")
+	e.POST("/api/signup", app.handleSignup)
+	e.POST("/api/login", app.handleLogin)
+
+	api := e.Group("/api")
+	api.Use(app.authMiddleware)
+	api.GET("/me", func(c echo.Context) error {
+		user := c.Get("user").(*jwt.Token)
+		claims := user.Claims.(*Claims)
+		return c.JSON(http.StatusOK, map[string]string{"email": claims.Email})
+	})
+	api.POST("/connectors/github", app.handleConnectGitHub)
+	api.DELETE("/connectors/github", app.handleDisconnectGitHub)
+	api.GET("/connectors/status", app.handleGetConnectorStatus)
+
+	e.GET("/ws", app.handleWebSocket, app.authMiddleware)
+
+	log.Println("Starting webapp server on http://localhost:3000")
+	e.Logger.Fatal(e.Start(":3000"))
+}
+
 type WebsocketMessage struct {
 	Type    string `json:"type"`
 	Sender  string `json:"sender"`
 	Content any    `json:"content"`
+}
+
+type Claims struct {
+	UserID string `json:"user_id"`
+	Email  string `json:"email"`
+	jwt.RegisteredClaims
 }
 
 type ToolCallInfo struct {
@@ -45,19 +108,55 @@ type AgentDecision struct {
 	ToolArgs map[string]any `json:"toolArgs"`
 }
 
+type UserCredentials struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
 type sessionHandler struct {
 	gatewayClient   *client.Client
 	anthropicClient anthropic.Client
 	conversation    []anthropic.MessageParam
 	systemPrompt    string
+	userJWT         string
 }
 
-func newSessionHandler() (*sessionHandler, error) {
-	if err := godotenv.Load(); err != nil {
-		log.Println("WebApp: Could not load .env file")
-		return nil, fmt.Errorf("loading .env: %w", err)
+func sendWsMessage(ws *websocket.Conn, msgType, sender string, content any) {
+	message := WebsocketMessage{
+		Type:    msgType,
+		Sender:  sender,
+		Content: content,
+	}
+	jsonMsg, err := json.Marshal(message)
+	if err != nil {
+		log.Printf("WebApp: ERROR - Failed to marshal WebSocket message: %v", err)
+		return
+	}
+	if err := ws.WriteMessage(websocket.TextMessage, jsonMsg); err != nil {
+		log.Printf("WebApp: WebSocket write error: %v", err)
+	}
+}
+
+func (app *App) handleWebSocket(c echo.Context) error {
+	user := c.Get("user").(*jwt.Token)
+
+	handler, err := newSessionHandler(user.Raw)
+	if err != nil {
+		log.Printf("Failed to create session handler: %v\n", err)
+		return c.String(http.StatusInternalServerError, "Failed to start agent session")
 	}
 
+	ws, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
+	if err != nil {
+		return fmt.Errorf("upgrading to websocket: %w", err)
+	}
+	defer ws.Close()
+
+	return handler.runConversation(c, ws)
+
+}
+
+func newSessionHandler(userJWT string) (*sessionHandler, error) {
 	gatewayClient, err := client.NewStreamableHttpClient(gatewayURL)
 	if err != nil {
 		return nil, fmt.Errorf("creating gateway client: %w", err)
@@ -105,64 +204,8 @@ func newSessionHandler() (*sessionHandler, error) {
 		anthropicClient: anthropicClient,
 		conversation:    []anthropic.MessageParam{},
 		systemPrompt:    systemPrompt,
+		userJWT:         userJWT,
 	}, nil
-}
-
-func sendWsMessage(ws *websocket.Conn, msgType, sender string, content any) {
-	message := WebsocketMessage{
-		Type:    msgType,
-		Sender:  sender,
-		Content: content,
-	}
-	jsonMsg, err := json.Marshal(message)
-	if err != nil {
-		log.Printf("WebApp: ERROR - Failed to marshal WebSocket message: %v", err)
-		return
-	}
-	if err := ws.WriteMessage(websocket.TextMessage, jsonMsg); err != nil {
-		log.Printf("WebApp: WebSocket write error: %v", err)
-	}
-}
-
-func (h *sessionHandler) handleWebSocket(c echo.Context) error {
-	ws, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
-	if err != nil {
-		return fmt.Errorf("upgrading to websocket: %w", err)
-	}
-	defer ws.Close()
-	defer h.gatewayClient.Close()
-	log.Println("WebApp: Client connected via WebSocket")
-
-	for {
-		_, msg, err := ws.ReadMessage()
-		if err != nil {
-			log.Println("WebApp: WebSocket read error:", err)
-			break
-		}
-
-		h.conversation = append(h.conversation, anthropic.NewUserMessage(anthropic.NewTextBlock(string(msg))))
-
-		for {
-			toolUseBlocks, textResponse, err := h.runAgentTurn(c.Request().Context())
-			if err != nil {
-				log.Printf("WebApp: Agent turn error: %v", err)
-				sendWsMessage(ws, "system_error", "System", ToolResultInfo{Name: "LLM API Call", Result: err.Error(), IsError: true})
-				break
-			}
-
-			if textResponse != "" {
-				sendWsMessage(ws, "agent_response", "Agent", textResponse)
-			}
-
-			if len(toolUseBlocks) == 0 {
-				break
-			}
-
-			toolResults := h.executeTools(c.Request().Context(), toolUseBlocks, ws)
-			h.conversation = append(h.conversation, anthropic.NewUserMessage(toolResults...))
-		}
-	}
-	return nil
 }
 
 func (h *sessionHandler) runAgentTurn(ctx context.Context) ([]anthropic.ToolUseBlock, string, error) {
@@ -231,6 +274,9 @@ func (h *sessionHandler) executeTools(ctx context.Context, blocks []anthropic.To
 		mcpReq := mcp.CallToolRequest{}
 		mcpReq.Params.Name = block.Name
 		mcpReq.Params.Arguments = args
+		mcpReq.Params.Meta = &mcp.Meta{
+			AdditionalFields: map[string]any{"jwt": h.userJWT},
+		}
 		result, err := h.gatewayClient.CallTool(ctx, mcpReq)
 
 		var resultText string
@@ -238,11 +284,24 @@ func (h *sessionHandler) executeTools(ctx context.Context, blocks []anthropic.To
 		if err != nil {
 			resultText = fmt.Sprintf("Gateway call failed: %v", err)
 			isError = true
-		} else {
+		} else if result.IsError {
 			if len(result.Content) > 0 {
 				if tc, ok := result.Content[0].(mcp.TextContent); ok {
 					resultText = tc.Text
 				}
+			}
+			if resultText == "" {
+				resultText = "[Downstream service returned an error with no content]"
+			}
+			isError = true
+		} else {
+			contentBytes, jsonErr := json.MarshalIndent(result.Content, "", "  ")
+			if jsonErr != nil {
+				resultText = fmt.Sprintf("Failed to marshal result content: %v", jsonErr)
+				isError = true
+			} else {
+				resultText = string(contentBytes)
+				isError = false
 			}
 		}
 
@@ -264,6 +323,42 @@ func (h *sessionHandler) executeTools(ctx context.Context, blocks []anthropic.To
 	}
 
 	return toolResults
+}
+
+func (h *sessionHandler) runConversation(c echo.Context, ws *websocket.Conn) error {
+	defer h.gatewayClient.Close()
+	log.Println("WebApp: Client connected via WebSocket")
+
+	for {
+		_, msg, err := ws.ReadMessage()
+		if err != nil {
+			log.Println("WebApp: WebSocket read error:", err)
+			break
+		}
+
+		h.conversation = append(h.conversation, anthropic.NewUserMessage(anthropic.NewTextBlock(string(msg))))
+
+		for {
+			toolUseBlocks, textResponse, err := h.runAgentTurn(c.Request().Context())
+			if err != nil {
+				log.Printf("WebApp: Agent turn error: %v", err)
+				sendWsMessage(ws, "system_error", "System", ToolResultInfo{Name: "LLM API Call", Result: err.Error(), IsError: true})
+				break
+			}
+
+			if textResponse != "" {
+				sendWsMessage(ws, "agent_response", "Agent", textResponse)
+			}
+
+			if len(toolUseBlocks) == 0 {
+				break
+			}
+
+			toolResults := h.executeTools(c.Request().Context(), toolUseBlocks, ws)
+			h.conversation = append(h.conversation, anthropic.NewUserMessage(toolResults...))
+		}
+	}
+	return nil
 }
 
 func getMetaToolsDefinition() []anthropic.ToolUnionParam {
@@ -308,21 +403,79 @@ func getMetaToolsDefinition() []anthropic.ToolUnionParam {
 	}
 }
 
-func main() {
-	e := echo.New()
-	e.Use(middleware.Logger())
-	e.Use(middleware.Recover())
+func (app *App) handleSignup(c echo.Context) error {
+	var creds UserCredentials
+	if err := c.Bind(&creds); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format."})
+	}
 
-	e.Static("/", "public")
-	e.GET("/ws", func(c echo.Context) error {
-		handler, err := newSessionHandler()
-		if err != nil {
-			log.Printf("Failed to create session handler: %v", err)
-			return c.String(http.StatusInternalServerError, "Could not connect to Routekit Gateway")
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(creds.Password), bcrypt.DefaultCost)
+	if err != nil {
+		log.Printf("Error hashing password: %v", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Server error during signup."})
+	}
+
+	_, err = app.dbPool.Exec(context.Background(), "INSERT INTO users (email, password_hash) VALUES ($1, $2)", creds.Email, string(hashedPassword))
+	if err != nil {
+		log.Printf("Error signing up user: %v", err)
+		return c.JSON(http.StatusConflict, map[string]string{"error": "User with this email already exists."})
+	}
+
+	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully."})
+}
+
+func (app *App) handleLogin(c echo.Context) error {
+	var creds UserCredentials
+	if err := c.Bind(&creds); err != nil {
+		return c.JSON(http.StatusBadRequest, "Invalid request")
+	}
+
+	var userID, storedHash string
+	err := app.dbPool.QueryRow(context.Background(), "SELECT id, password_hash FROM users WHERE email = $1", creds.Email).Scan(&userID, &storedHash)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return c.JSON(http.StatusUnauthorized, "Invalid credentials")
 		}
-		return handler.handleWebSocket(c)
-	})
+		return c.JSON(http.StatusInternalServerError, "Database error")
+	}
 
-	log.Println("Starting webapp server on http://localhost:3000")
-	e.Logger.Fatal(e.Start(":3000"))
+	if err := bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(creds.Password)); err != nil {
+		return c.JSON(http.StatusUnauthorized, "Invalid credentials")
+	}
+
+	expiration := time.Now().Add(time.Hour * jwtExpirationHours)
+	claims := &Claims{
+		UserID:           userID,
+		Email:            creds.Email,
+		RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(expiration)},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(app.jwtSecret)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, "Failed to create token")
+	}
+
+	c.SetCookie(&http.Cookie{
+		Name: "token", Value: tokenString, Expires: expiration, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode,
+	})
+	return c.JSON(http.StatusOK, map[string]string{"message": "Login successful"})
+}
+
+func (app *App) authMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		cookie, err := c.Cookie("token")
+		if err != nil {
+			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		}
+
+		token, err := jwt.ParseWithClaims(cookie.Value, &Claims{}, func(token *jwt.Token) (any, error) {
+			return app.jwtSecret, nil
+		})
+		if err != nil || !token.Valid {
+			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "invalid token"})
+		}
+		c.Set("user", token)
+		return next(c)
+	}
 }

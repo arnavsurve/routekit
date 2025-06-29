@@ -1,4 +1,3 @@
-<!-- apps/webapp/public/index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -11,6 +10,47 @@
             flex-direction: column;
             height: 100vh;
             margin: 0;
+        }
+        .nav {
+            background-color: #f8f9fa;
+            padding: 15px 0;
+            border-bottom: 1px solid #eaeaea;
+        }
+        .nav-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .nav-brand {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+            text-decoration: none;
+        }
+        .nav ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: flex;
+        }
+        .nav li {
+            margin-left: 20px;
+        }
+        .nav a {
+            text-decoration: none;
+            color: #333;
+            font-weight: 500;
+            padding: 5px 0;
+        }
+        .nav a:hover {
+            color: #007bff;
+        }
+        .nav a.active {
+            color: #007bff;
+            border-bottom: 2px solid #007bff;
         }
         #messages { 
             flex-grow: 1;
@@ -91,17 +131,31 @@
         }
     </style>
 </head>
-<body> 
+<body>
+    <div class="nav">
+        <div class="nav-container">
+            <a href="/" class="nav-brand">Routekit</a>
+            <ul>
+                <li><a href="/" class="active">Chat</a></li>
+                <li><a href="/settings.html">Settings</a></li>
+            </ul>
+        </div>
+    </div>
     <div id="messages"></div>
     <div id="form-container">
         <form id="form" action="">
-            <input id="input"/><button>⏎</button>
+            <input id="input" autocomplete="off"/><button>⏎</button>
         </form>
     </div>
     <script>
         const messages = document.getElementById('messages');
         const form = document.getElementById('form');
         const input = document.getElementById('input');
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            const userEmail = await checkAuth();
+            if (!userEmail) return;
+        });
 
         // Establish WebSocket connection
         const ws = new WebSocket(`ws://${window.location.host}/ws`);
@@ -211,6 +265,22 @@
             
             messages.appendChild(item);
             messages.scrollTop = messages.scrollHeight;
+        }
+
+        async function checkAuth() {
+            try {
+                const response = await fetch('/api/me');
+                if (!response.ok) {
+                    window.location.href = '/login.html';
+                    return false;
+                } 
+                const data = await response.json();
+                return data.email;
+            } catch (error) {
+                console.error('Error checking authentication:', error);
+                window.location.href = '/login.html';
+                return false;
+            }
         }
     </script>
 </body>
