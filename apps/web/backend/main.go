@@ -84,15 +84,17 @@ func newSessionHandler() (*sessionHandler, error) {
 	}
 	anthropicClient := anthropic.NewClient(option.WithAPIKey(apiKey))
 
-	systemPrompt := `You are Routekit, an expert AI assistant that is capable of getting real work done. Your goal is to help users and accomplish tasks assigned to you by using internal tools. These tools are available to you via the 'Routekit Gateway'. To execute on a task, you must follow this workflow:
+	systemPrompt := `You are Routekit, an expert AI assistant capable of getting work done. Your goal is to help users with requests and accomplish tasks assigned to you by using tools at your disposal. To the user, you are a helpful, conversational assistant ready to help the user with whatever they need. These tools are available to you via the 'Routekit Gateway'. To execute on a task, you must follow this workflow:
 
 	1.  **SEARCH:** You MUST first call the 'routekit_search_tools' function with a query describing the user's goal.
 	2.  **ANALYZE:** The search will return a JSON object containing a list of tools and an instruction. Review the tool definitions ('name', 'description', 'inputSchema').
 	3.  **EXECUTE:** You MUST then call the 'routekit_execute' function.
 	    - The 'tool_name' parameter for 'routekit_execute' MUST be the 'name' of a tool from the search results.
 	    - The 'tool_args' parameter for 'routekit_execute' MUST be a JSON object matching the 'inputSchema' of the chosen tool.
-	4.  **SUMMARIZE:** Once the tool execution is successful, summarize the result for the user in a clear and helpful way.
+	4.  **SUMMARIZE:** Once the tool execution is successful, summarize the result for the user in a clear and helpful way. Be detailed and provide context if you create any additional resources or take any actions.
 	5.  **REPEAT:** If the user's goal is not yet achieved, repeat the process.
+
+	DO NOT be proactive in creating, updating, or deleting resources. You are free to read and gather information as you wish, but never make any changes to resources without explicit instruction from the user.
 
 	If you must defer to the user for a decision, do so by sending a message to the user and waiting for their response. Do not attempt to call the tools found in the search results directly. You must always use 'routekit_execute' to run them.
 
@@ -198,13 +200,6 @@ func (h *sessionHandler) executeTools(ctx context.Context, blocks []anthropic.To
 	var toolResults []anthropic.ContentBlockParamUnion
 
 	for _, block := range blocks {
-		argsBytes, _ := json.MarshalIndent(block.Input, "", "  ")
-
-		sendWsMessage(ws, "tool_start", "Agent", ToolCallInfo{
-			Name: block.Name,
-			Args: string(argsBytes),
-		})
-
 		var args map[string]any
 		if err := json.Unmarshal(block.Input, &args); err != nil {
 			log.Printf("Error parsing tool args: %v", err)
@@ -213,6 +208,25 @@ func (h *sessionHandler) executeTools(ctx context.Context, blocks []anthropic.To
 			toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, resultText, true))
 			continue
 		}
+
+		toolNameToDisplay := block.Name
+		toolArgsForDisplay := block.Input
+
+		if block.Name == "routekit_execute" {
+			if fqn, ok := args["tool_name"].(string); ok {
+				toolNameToDisplay = fqn
+			}
+			if toolArgs, ok := args["tool_args"]; ok {
+				toolArgsForDisplay, _ = json.MarshalIndent(toolArgs, "", "  ")
+			}
+		} else {
+			toolArgsForDisplay, _ = json.MarshalIndent(block.Input, "", "  ")
+		}
+
+		sendWsMessage(ws, "tool_start", "Agent", ToolCallInfo{
+			Name: toolNameToDisplay,
+			Args: string(toolArgsForDisplay),
+		})
 
 		mcpReq := mcp.CallToolRequest{}
 		mcpReq.Params.Name = block.Name
@@ -234,13 +248,13 @@ func (h *sessionHandler) executeTools(ctx context.Context, blocks []anthropic.To
 
 		if isError {
 			sendWsMessage(ws, "system_error", "System", ToolResultInfo{
-				Name:    block.Name,
+				Name:    toolNameToDisplay,
 				Result:  resultText,
 				IsError: true,
 			})
 		} else {
 			sendWsMessage(ws, "tool_result", "Tool", ToolResultInfo{
-				Name:    block.Name,
+				Name:    toolNameToDisplay,
 				Result:  resultText,
 				IsError: false,
 			})

@@ -5,37 +5,99 @@
     <meta charset="UTF-8">
     <title>Routekit Chat</title>
     <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; margin: 0; }
-        #messages { flex-grow: 1; overflow-y: auto; padding: 10px; border-bottom: 1px solid #ccc; }
-        #form { display: flex; padding: 10px; }
-        #input { flex-grow: 1; padding: 8px; }
-        pre { white-space: pre-wrap; word-wrap: break-word; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            margin: 0;
+        }
+        #messages { 
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 3rem;
+        }
+        #form { 
+            display: flex;
+            padding: 1rem;
+        }
+        #input { 
+            flex-grow: 1;
+            padding: 0.75rem;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 1rem;
+        }
+        #input:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+        }
+        #form button {
+            background-color: black;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            margin-left: 0.5rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1rem;
+        }
+        #form button:hover {
+            background-color: rgba(0, 0, 0, 0.883);
+        }
+        pre { 
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            margin: 0;
+            padding: 0.5rem;
+            border-radius: 4px;
+        }
+        .message-container {
+            margin-bottom: 1rem;
+        }
         .tool-call, .tool-result, .system-error {
             background-color: #f0f0f0;
             border-left: 4px solid #ccc;
-            padding: 10px;
-            margin: 10px 0;
+            padding: 1rem;
+            margin: 1rem 0;
             font-family: monospace;
+            border-radius: 4px;
+            overflow-wrap: break-word;
         }
         .tool-result { border-left-color: #4caf50; }
         .system-error { border-left-color: #f44336; }
-        .truncated-content {
-            display: -webkit-box;
-            -webkit-line-clamp: 4;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
+        
+        /* Styles for the preview and expandable content */
+        .preview-text {
+            color: #555;
+            padding-left: 0.5rem;
+            display: inline;
+            font-style: italic;
+        }
+        .details-summary {
+            cursor: pointer;
+            outline: none; /* Removes the focus ring on click */
+        }
+        .details-summary::-webkit-details-marker {
+            color: #555;
         }
         .expanded-content {
-            max-height: 10rem;
+            margin-top: 0.75rem;
+            max-height: 15rem; /* Increased height for more content */
             overflow-y: auto;
+            border-top: 1px solid #ddd;
+            padding-top: 0.75rem;
         }
     </style>
 </head>
-<body>
+<body> 
     <div id="messages"></div>
-    <form id="form" action="">
-        <input id="input" autocomplete="off" /><button>Send</button>
-    </form>
+    <div id="form-container">
+        <form id="form" action="">
+            <input id="input"/><button>⏎</button>
+        </form>
+    </div>
     <script>
         const messages = document.getElementById('messages');
         const form = document.getElementById('form');
@@ -72,7 +134,7 @@
                     appendToolResult(data.content.name, data.content.result, true);
                     break;
                 default:
-                    appendMessage(data.sender, JSON.stringify(data.content));
+                    appendMessage("System", `Received unknown message type: ${data.type}`);
             }
         }
 
@@ -80,7 +142,6 @@
             e.preventDefault();
             if (input.value) {
                 appendMessage("You", input.value);
-                // Send user message to the backend
                 ws.send(input.value);
                 input.value = '';
             }
@@ -88,6 +149,7 @@
 
         function appendMessage(sender, text) {
             const item = document.createElement('div');
+            item.className = 'message-container';
             item.innerHTML = `<b>${sender}:</b> <pre>${text}</pre>`;
             messages.appendChild(item);
             messages.scrollTop = messages.scrollHeight;
@@ -105,29 +167,45 @@
             const item = document.createElement('div');
             item.className = isError ? 'system-error' : 'tool-result';
             
-            // Create the pre element for the result
-            const pre = document.createElement('pre');
-            pre.textContent = result;
-            pre.className = 'truncated-content';
+            // 1. Create the preview text
+            const lines = result.toString().split('\n');
+            const preview = lines.slice(0, 3).join('\n') + (lines.length > 3 ? '...' : '');
+
+            // 2. Create the container for the output section
+            const outputContainer = document.createElement('div');
             
-            // Create the details element
+            // 3. Create the <details> and <summary> elements
             const details = document.createElement('details');
             const summary = document.createElement('summary');
+            summary.className = 'details-summary';
             summary.textContent = 'Output';
+
+            // 4. Create the preview span
+            const previewSpan = document.createElement('span');
+            previewSpan.className = 'preview-text';
+            previewSpan.textContent = `: ${preview}`;
+
+            // 5. Create the full content pre element
+            const fullContentPre = document.createElement('pre');
+            fullContentPre.textContent = result;
+            fullContentPre.className = 'expanded-content';
             
-            // Add event listener to toggle between truncated and expanded view
-            details.addEventListener('toggle', function() {
-                if (this.open) {
-                    pre.className = 'expanded-content';
+            // Initially, only the summary and preview are visible together
+            summary.appendChild(previewSpan);
+            details.appendChild(summary);
+            details.appendChild(fullContentPre);
+
+            // 6. Add event listener to hide/show preview
+            details.addEventListener('toggle', (event) => {
+                if (details.open) {
+                    // When expanded, hide the preview text
+                    previewSpan.style.display = 'none';
                 } else {
-                    pre.className = 'truncated-content';
+                    // When collapsed, show the preview text
+                    previewSpan.style.display = 'inline';
                 }
             });
-            
-            // Append elements
-            details.appendChild(summary);
-            details.appendChild(pre);
-            
+
             item.innerHTML = `<b>${isError ? 'System' : 'Tool'}:</b> → Result from <b>${name}</b>`;
             item.appendChild(details);
             

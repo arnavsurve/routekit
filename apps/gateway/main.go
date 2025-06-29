@@ -135,8 +135,8 @@ func (gw *GatewayServer) routeToolCall(ctx context.Context, req mcp.CallToolRequ
 }
 
 type SearchResult struct {
-	Instruction string `json:"instruction"`
-	Tools       []mcp.Tool `json:"tools"`
+	// Instruction string `json:"instruction"`
+	Tools []mcp.Tool `json:"tools"`
 }
 
 func (gw *GatewayServer) handleSearchTools(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -160,8 +160,8 @@ func (gw *GatewayServer) handleSearchTools(ctx context.Context, req mcp.CallTool
 	}
 
 	searchResult := SearchResult{
-		Instruction: "Here are the relevant tools for your request. To use one, call the 'routekit_execute' tool with the desired 'tool_name' and 'tool_args'.",
-		Tools:       foundTools,
+		// Instruction: "To use a tool, call the 'routekit_execute' tool with the desired 'tool_name' and 'tool_args'.",
+		Tools: foundTools,
 	}
 
 	jsonRes, err := json.MarshalIndent(searchResult, "", "  ")
