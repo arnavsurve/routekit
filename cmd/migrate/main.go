@@ -26,6 +26,7 @@ func main() {
 	log.Println("pgvector extension created successfully")
 
 	_, err = conn.Exec(context.Background(), `
+DROP TABLE IF EXISTS capabilities;
 CREATE TABLE IF NOT EXISTS capabilities (
 	fqn TEXT PRIMARY KEY,
 	service_name TEXT NOT NULL,
@@ -37,7 +38,7 @@ CREATE TABLE IF NOT EXISTS capabilities (
 );
 	`)
 	if err != nil {
-		log.Fatalf("Failed to create capabilites table: %v\n", err)
+		log.Fatalf("Failed to create capabilities table: %v\n", err)
 	}
 	log.Println("Capabilities table is ready.")
 

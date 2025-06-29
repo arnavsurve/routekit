@@ -85,15 +85,22 @@ func (r *Registry) RegisterCapabilities(ctx context.Context, serviceName, servic
 			continue
 		}
 
+		inputSchemaBytes, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			log.Printf("Registry: ERROR - Failed to marshal inputSchema for %q: %v\n", fqn, err)
+			continue
+		}
+
 		_, err = r.db.Exec(ctx, `
-			INSERT INTO capabilities (fqn, service_name, tool_name, description, target_url, embedding)
-			VALUES ($1, $2, $3, $4, $5, $6)
+			INSERT INTO capabilities (fqn, service_name, tool_name, description, target_url, input_schema, embedding)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (fqn) DO UPDATE SET
 				description = EXCLUDED.description,
 				target_url = EXCLUDED.target_url,
-				embedding = EXCLUDED.embedding;
+				embedding = EXCLUDED.embedding,
+				input_schema = EXCLUDED.input_schema;
 		`,
-			fqn, serviceName, tool.Name, tool.Description, serviceURL, pgvector.NewVector(embedding))
+			fqn, serviceName, tool.Name, tool.Description, serviceURL, inputSchemaBytes, pgvector.NewVector(embedding))
 
 		if err != nil {
 			log.Printf("Registry: ERROR - Failed to register capability %q: %v\n", fqn, err)
@@ -134,8 +141,12 @@ func (r *Registry) SearchCapabilities(ctx context.Context, query string) ([]mcp.
 		}
 
 		var inputSchema mcp.ToolInputSchema
-		if err := json.Unmarshal(inputSchemaBytes, &inputSchema); err != nil {
-			log.Printf("Registry: WARN - could not parse inputSchema for tool %q: %v\n", fqn, err)
+		if len(inputSchemaBytes) > 0 {
+			if err := json.Unmarshal(inputSchemaBytes, &inputSchema); err != nil {
+				log.Printf("Registry: WARN - could not parse inputSchema for tool %q: %v\n", fqn, err)
+			}
+		} else {
+			inputSchema = mcp.ToolInputSchema{Type: "object", Properties: map[string]any{}}
 		}
 
 		results = append(results, mcp.Tool{
@@ -156,4 +167,44 @@ func (r *Registry) Resolve(ctx context.Context, fqn string) (string, bool) {
 		return "", false
 	}
 	return targetURL, true
+}
+
+func (r *Registry) GetAllCapabilities(ctx context.Context) ([]mcp.Tool, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT fqn, service_name, description, input_schema
+		FROM capabilities
+		ORDER BY fqn;
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("getting all capabilities: %w", err)
+	}
+	defer rows.Close()
+
+	var results []mcp.Tool
+	for rows.Next() {
+		var (
+			fqn              string
+			serviceName      string
+			description      string
+			inputSchemaBytes []byte
+		)
+		if err := rows.Scan(&fqn, &serviceName, &description, &inputSchemaBytes); err != nil {
+			return nil, fmt.Errorf("scanning capabilities: %w", err)
+		}
+
+		var inputSchema mcp.ToolInputSchema
+		if len(inputSchemaBytes) > 0 {
+			if err := json.Unmarshal(inputSchemaBytes, &inputSchema); err != nil {
+				log.Printf("Registry: WARN - could not parse inputSchema for tool %q: %v\n", fqn, err)
+			}
+		}
+
+		results = append(results, mcp.Tool{
+			Name:        fqn,
+			Description: fmt.Sprintf("[%s] %s", serviceName, description),
+			InputSchema: inputSchema,
+		})
+	}
+
+	return results, nil
 }

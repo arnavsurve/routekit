@@ -33,7 +33,7 @@ func NewGatewayServer() *GatewayServer {
 
 	s.AddTool(
 		mcp.NewTool("routekit_search_tools",
-			mcp.WithDescription("Search for available tools based on a natural language query."),
+			mcp.WithDescription("Search for available tools based on a natural language query. If an empty query is provided, returns all tools."),
 			mcp.WithString("query", mcp.Required(), mcp.Description("A description of the task you want to perform.")),
 		),
 		gw.handleSearchTools,
@@ -110,7 +110,17 @@ func (gw *GatewayServer) handleSearchTools(ctx context.Context, req mcp.CallTool
 	query := req.GetString("query", "")
 	log.Printf("Gateway: Searching for tools with query: %s", query)
 
-	foundTools, err := gw.registry.SearchCapabilities(ctx, query)
+	var foundTools []mcp.Tool
+	var err error
+
+	if query == "" || query == "*" {
+		log.Println("Gateway: Performing a 'list all' operation.")
+		foundTools, err = gw.registry.GetAllCapabilities(ctx)
+	} else {
+		log.Println("Gateway: Performing a semantic search.")
+		foundTools, err = gw.registry.SearchCapabilities(ctx, query)
+	}
+
 	if err != nil {
 		log.Printf("Gateway: ERROR - Search failed: %v", err)
 		return mcp.NewToolResultError("search failed: " + err.Error()), nil
