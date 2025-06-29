@@ -134,6 +134,11 @@ func (gw *GatewayServer) routeToolCall(ctx context.Context, req mcp.CallToolRequ
 	return downstreamClient.CallTool(ctx, downstreamReq)
 }
 
+type SearchResult struct {
+	Instruction string `json:"instruction"`
+	Tools       []mcp.Tool `json:"tools"`
+}
+
 func (gw *GatewayServer) handleSearchTools(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	query := req.GetString("query", "")
 	log.Printf("Gateway: Searching for tools with query: %s", query)
@@ -154,7 +159,12 @@ func (gw *GatewayServer) handleSearchTools(ctx context.Context, req mcp.CallTool
 		return mcp.NewToolResultError("search failed: " + err.Error()), nil
 	}
 
-	jsonRes, err := json.MarshalIndent(foundTools, "", "  ")
+	searchResult := SearchResult{
+		Instruction: "Here are the relevant tools for your request. To use one, call the 'routekit_execute' tool with the desired 'tool_name' and 'tool_args'.",
+		Tools:       foundTools,
+	}
+
+	jsonRes, err := json.MarshalIndent(searchResult, "", "  ")
 	if err != nil {
 		log.Printf("Gateway: ERROR serializing search results: %v", err)
 		return mcp.NewToolResultError("failed to serialize search results: " + err.Error()), nil

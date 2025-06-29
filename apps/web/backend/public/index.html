@@ -10,6 +10,25 @@
         #form { display: flex; padding: 10px; }
         #input { flex-grow: 1; padding: 8px; }
         pre { white-space: pre-wrap; word-wrap: break-word; }
+        .tool-call, .tool-result, .system-error {
+            background-color: #f0f0f0;
+            border-left: 4px solid #ccc;
+            padding: 10px;
+            margin: 10px 0;
+            font-family: monospace;
+        }
+        .tool-result { border-left-color: #4caf50; }
+        .system-error { border-left-color: #f44336; }
+        .truncated-content {
+            display: -webkit-box;
+            -webkit-line-clamp: 4;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .expanded-content {
+            max-height: 10rem;
+            overflow-y: auto;
+        }
     </style>
 </head>
 <body>
@@ -30,14 +49,32 @@
         };
 
         ws.onmessage = (event) => {
-            // We'll just append the raw text for now.
-            // A real app would parse the JSON and render different message types.
-            appendMessage("Agent", event.data);
+            const data = JSON.parse(event.data);
+            handleMessage(data);
         };
         
         ws.onclose = () => {
             appendMessage("System", "Connection closed.");
         };
+
+        function handleMessage(data) {
+            switch (data.type) {
+                case 'agent_response':
+                    appendMessage(data.sender, data.content);
+                    break;
+                case 'tool_start':
+                    appendToolCall(data.content.name, data.content.args);
+                    break;
+                case 'tool_result':
+                    appendToolResult(data.content.name, data.content.result, false);
+                    break;
+                case 'system_error':
+                    appendToolResult(data.content.name, data.content.result, true);
+                    break;
+                default:
+                    appendMessage(data.sender, JSON.stringify(data.content));
+            }
+        }
 
         form.addEventListener('submit', (e) => {
             e.preventDefault();
@@ -52,6 +89,48 @@
         function appendMessage(sender, text) {
             const item = document.createElement('div');
             item.innerHTML = `<b>${sender}:</b> <pre>${text}</pre>`;
+            messages.appendChild(item);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function appendToolCall(name, args) {
+            const item = document.createElement('div');
+            item.className = 'tool-call';
+            item.innerHTML = `<b>Agent:</b> ⏺ Executing <b>${name}</b>...<details><summary>Arguments</summary><pre>${args}</pre></details>`;
+            messages.appendChild(item);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function appendToolResult(name, result, isError) {
+            const item = document.createElement('div');
+            item.className = isError ? 'system-error' : 'tool-result';
+            
+            // Create the pre element for the result
+            const pre = document.createElement('pre');
+            pre.textContent = result;
+            pre.className = 'truncated-content';
+            
+            // Create the details element
+            const details = document.createElement('details');
+            const summary = document.createElement('summary');
+            summary.textContent = 'Output';
+            
+            // Add event listener to toggle between truncated and expanded view
+            details.addEventListener('toggle', function() {
+                if (this.open) {
+                    pre.className = 'expanded-content';
+                } else {
+                    pre.className = 'truncated-content';
+                }
+            });
+            
+            // Append elements
+            details.appendChild(summary);
+            details.appendChild(pre);
+            
+            item.innerHTML = `<b>${isError ? 'System' : 'Tool'}:</b> → Result from <b>${name}</b>`;
+            item.appendChild(details);
+            
             messages.appendChild(item);
             messages.scrollTop = messages.scrollHeight;
         }
