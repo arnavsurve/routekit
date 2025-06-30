@@ -1,24 +1,37 @@
-package main
+package connectors
 
 import (
 	"context"
 	"net/http"
 
+	"github.com/arnavsurve/routekit/apps/web/backend/auth"
 	"github.com/arnavsurve/routekit/pkg/crypto"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 )
 
-type ConnectorRequest struct {
+type GitHubConnector struct {
+	app *App
+}
+
+func NewGitHubConnector(app *App) *GitHubConnector {
+	return &GitHubConnector{app: app}
+}
+
+type connectRequest struct {
 	Token string `json:"token"`
 }
 
-func (app *App) handleConnectGitHub(c echo.Context) error {
+func (g *GitHubConnector) ServiceName() string {
+	return "github"
+}
+
+func (g *GitHubConnector) Connect(c echo.Context) error {
 	user := c.Get("user").(*jwt.Token)
-	claims := user.Claims.(*Claims)
+	claims := user.Claims.(*auth.Claims)
 	userID := claims.UserID
 
-	var req ConnectorRequest
+	var req connectRequest
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid request"})
 	}
@@ -28,7 +41,7 @@ func (app *App) handleConnectGitHub(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to secure token"})
 	}
 
-	_, err = app.dbPool.Exec(context.Background(), `
+	_, err = g.app.DBPool.Exec(context.Background(), `
 		INSERT INTO connected_services (user_id, service_name, credentials_encrypted)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (user_id, service_name) DO UPDATE SET
@@ -43,12 +56,12 @@ func (app *App) handleConnectGitHub(c echo.Context) error {
 	})
 }
 
-func (app *App) handleDisconnectGitHub(c echo.Context) error {
+func (g *GitHubConnector) Disconnect(c echo.Context) error {
 	user := c.Get("user").(*jwt.Token)
-	claims := user.Claims.(*Claims)
+	claims := user.Claims.(*auth.Claims)
 	userID := claims.UserID
 
-	_, err := app.dbPool.Exec(context.Background(), `
+	_, err := g.app.DBPool.Exec(context.Background(), `
 		DELETE FROM connected_services WHERE user_id = $1 AND service_name = $2
 	`, userID, "github")
 	if err != nil {
@@ -60,18 +73,18 @@ func (app *App) handleDisconnectGitHub(c echo.Context) error {
 	})
 }
 
-func (app *App) handleGetConnectorStatus(c echo.Context) error {
+func (g *GitHubConnector) GetStatus(c echo.Context) bool {
 	user := c.Get("user").(*jwt.Token)
-	claims := user.Claims.(*Claims)
+	claims := user.Claims.(*auth.Claims)
 	userID := claims.UserID
 
 	var count int
-	err := app.dbPool.QueryRow(context.Background(),
+	err := g.app.DBPool.QueryRow(context.Background(),
 		"SELECT COUNT(*) FROM connected_services WHERE user_id = $1 AND service_name = $2",
 		userID, "github").Scan(&count)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "database error"})
+		return false
 	}
 
-	return c.JSON(http.StatusOK, map[string]bool{"github_connected": count > 0})
+	return count > 0
 }

@@ -13,6 +13,7 @@ require (
 	github.com/pgvector/pgvector-go v0.3.0
 	github.com/sashabaranov/go-openai v1.40.3
 	golang.org/x/crypto v0.38.0
+	gopkg.in/yaml.v2 v2.4.0
 )
 
 require (

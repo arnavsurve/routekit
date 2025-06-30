@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/arnavsurve/routekit/pkg/config"
 	"github.com/arnavsurve/routekit/pkg/crypto"
 	"github.com/arnavsurve/routekit/pkg/db"
 	"github.com/arnavsurve/routekit/pkg/registry"
@@ -173,6 +174,87 @@ func (gw *GatewayServer) getDownstreamClient(targetURL, authToken string) (*clie
 		return nil, fmt.Errorf("failed to initialize connection: %w", err)
 	}
 	return c, nil
+}
+
+func (gw *GatewayServer) createClientForService(service config.ServiceConfig, authToken string) (*client.Client, error) {
+	log.Printf("Gateway: Creating client for service %q with transport %q at %s", service.Name, service.Transport, service.URL)
+
+	var c *client.Client
+	var err error
+
+	var httpOpts []transport.StreamableHTTPCOption
+	var sseOpts []transport.ClientOption
+	if authToken != "" {
+		headers := map[string]string{"Authorization": "Bearer " + authToken}
+		httpOpts = append(httpOpts, transport.WithHTTPHeaders(headers))
+		sseOpts = append(sseOpts, transport.WithHeaders(headers))
+	}
+
+	switch service.Transport {
+	case "streamable-http":
+		if service.URL == "" {
+			return nil, fmt.Errorf("URL is required for streamable-http transport")
+		}
+		c, err = client.NewStreamableHttpClient(service.URL, httpOpts...)
+
+	case "sse":
+		if service.URL == "" {
+			return nil, fmt.Errorf("URL is required for sse transport")
+		}
+		c, err = client.NewSSEMCPClient(service.URL, sseOpts...)
+
+	case "stdio":
+		if len(service.Command) == 0 {
+			return nil, fmt.Errorf("command is required for stdio transport")
+		}
+		command := service.Command[0]
+		args := service.Command[1:]
+		c, err = client.NewStdioMCPClient(command, nil, args...)
+	default:
+		return nil, fmt.Errorf("unknown transport %q", service.Transport)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create client for service %s: %w", service.Name, err)
+	}
+
+	initCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if needsStart(c) {
+		if startErr := c.Start(initCtx); startErr != nil {
+			c.Close()
+			return nil, fmt.Errorf("failed to start client transport for %s: %w", service.Name, startErr)
+		}
+	}
+
+	_, initErr := c.Initialize(initCtx, mcp.InitializeRequest{
+		Params: struct {
+			ProtocolVersion string                 `json:"protocolVersion"`
+			Capabilities    mcp.ClientCapabilities `json:"capabilities"`
+			ClientInfo      mcp.Implementation     `json:"clientInfo"`
+		}{ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION},
+	})
+	if initErr != nil {
+		c.Close()
+		return nil, fmt.Errorf("failed to initialize connection for %s: %w", service.Name, initErr)
+	}
+
+	return c, nil
+}
+
+// needsStart is a helper to check if the client transport needs to be explicitly started.
+// The `mcp-go` v0.32.0 `NewStdioMCPClient` starts the client automatically,
+// while others like SSE and StreamableHTTP require an explicit `Start()` call.
+// We can check the transport type to be safe.
+func needsStart(c *client.Client) bool {
+	trans := c.GetTransport()
+	switch trans.(type) {
+	case *transport.Stdio:
+		return false
+	default:
+		return true
+	}
 }
 
 type SearchResult struct {

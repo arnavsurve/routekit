@@ -316,7 +316,7 @@
                 const response = await fetch(`/api/connectors/status`);
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || 'Failed to get status');
-                const isConnected = data.github_connected;
+                const isConnected = data.github;
                 updateConnectionUI(isConnected);
             } catch (error) {
                 console.error('Error checking GitHub connection:', error);

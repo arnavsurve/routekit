@@ -1,23 +1,33 @@
 version: 1
 services:
   - name: user-service
+    transport: streamable-http
     url: http://localhost:8081/mcp
-    # schemaPath: ./services/user-service/routekit.yml
+
   - name: inventory-service
+    transport: streamable-http
     url: http://localhost:8082/mcp
-    # schemaPath: ./services/inventory-service/routekit.yml
+
   - name: crm-service
+    transport: streamable-http
     url: http://localhost:8083/mcp
-    # schemaPath: ./services/crm-service/routekit.yml
+
   - name: kb-service
+    transport: streamable-http
     url: http://localhost:8084/mcp
-    # schemaPath: ./services/kb-service/routekit.yml
+
   - name: devops-service
+    transport: streamable-http
     url: http://localhost:8085/mcp
-    # schemaPath: ./services/devops-service/routekit.yml
+
   - name: support-service
+    transport: streamable-http
     url: http://localhost:8086/mcp
-    # schemaPath: ./services/support-service/routekit.yml
+
   - name: bug-tracker-service
+    transport: streamable-http
     url: http://localhost:8087/mcp
-    # schemaPath: ./services/bug-tracker-service/routekit.yml
+
+  - name: github
+    transport: streamable-http
+    url: https://api.githubcopilot.com/mcp
