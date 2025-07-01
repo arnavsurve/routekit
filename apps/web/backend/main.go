@@ -67,8 +67,8 @@ func main() {
 	connectorManager.Register(connectors.NewGitHubConnector(appDB))
 
 	// Atlassian connector
-	atlassianConnector := connectors.NewAtlassianConnector(appDB)
-	connectorManager.Register(atlassianConnector)
+	// atlassianConnector := connectors.NewAtlassianConnector(appDB)
+	// connectorManager.Register(atlassianConnector)
 
 	connectorRoutes := api.Group("/connectors")
 	// For each connector, registerRoutes provides:
@@ -76,8 +76,8 @@ func main() {
 	// - DELETE disconnect
 	connectorManager.RegisterRoutes(connectorRoutes)
 
-	api.GET("/connectors/atlassian/connect", atlassianConnector.Connect)
-	api.GET("/connectors/atlassian/callback", atlassianConnector.Callback)
+	// api.GET("/connectors/atlassian/connect", atlassianConnector.Connect)
+	// api.GET("/connectors/atlassian/callback", atlassianConnector.Callback)
 
 	// Connectors status
 	api.GET("/connectors/status", connectorManager.HandleGetAllStatuses)

@@ -92,7 +92,7 @@ func (a *AtlassianConnector) Callback(c echo.Context) error {
 }
 
 func (a *AtlassianConnector) exchangeCodeForToken(ctx context.Context, code, requestHost string) ([]byte, error) {
-	redirectURI := fmt.Sprintf("http://%s/api/connectors/atlassian./callback", requestHost)
+	redirectURI := fmt.Sprintf("http://%s/api/connectors/atlassian/callback", requestHost)
 
 	data := url.Values{
 		"grant_type":    {"authorization_code"},

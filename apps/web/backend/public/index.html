@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <title>Routekit Chat</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/json.min.js"></script>
     <style>
         body { 
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -217,12 +220,23 @@
             messages.scrollTop = messages.scrollHeight;
         }
 
+        function tryParseJSON(str) {
+            try {
+                const obj = JSON.parse(str);
+                return JSON.stringify(obj, null, 2); // Pretty print with 2 spaces
+            } catch (e) {
+                return str; // Return original string if not valid JSON
+            }
+        }
+
         function appendToolResult(name, result, isError) {
             const item = document.createElement('div');
             item.className = isError ? 'system-error' : 'tool-result';
             
             // 1. Create the preview text
-            const lines = result.toString().split('\n');
+            // Try to parse and format JSON
+            const formattedResult = tryParseJSON(result.toString());
+            const lines = formattedResult.split('\n');
             const preview = lines.slice(0, 3).join('\n') + (lines.length > 3 ? '...' : '');
 
             // 2. Create the container for the output section
@@ -241,7 +255,14 @@
 
             // 5. Create the full content pre element
             const fullContentPre = document.createElement('pre');
-            fullContentPre.textContent = result;
+            fullContentPre.textContent = formattedResult;
+            if (formattedResult !== result.toString()) {
+                // If it was valid JSON, add syntax highlighting
+                fullContentPre.className = 'expanded-content hljs language-json';
+                hljs.highlightElement(fullContentPre);
+            } else {
+                fullContentPre.className = 'expanded-content';
+            }
             fullContentPre.className = 'expanded-content';
             
             // Initially, only the summary and preview are visible together

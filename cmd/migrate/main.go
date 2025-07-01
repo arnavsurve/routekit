@@ -37,22 +37,22 @@ CREATE TABLE IF NOT EXISTS users (
 	}
 	log.Println("Users table is ready.")
 
-	_, err = conn.Exec(context.Background(), `
-DROP TABLE IF EXISTS capabilities;
-CREATE TABLE IF NOT EXISTS capabilities (
-	fqn TEXT PRIMARY KEY,
-	service_name TEXT NOT NULL,
-	tool_name TEXT NOT NULL,
-	description TEXT,
-	target_url TEXT NOT NULL,
-	input_schema JSONB,
-	embedding VECTOR(1536)
-);
-	`)
-	if err != nil {
-		log.Fatalf("Failed to create capabilities table: %v\n", err)
-	}
-	log.Println("Capabilities table is ready.")
+	// 	_, err = conn.Exec(context.Background(), `
+	// DROP TABLE IF EXISTS capabilities;
+	// CREATE TABLE IF NOT EXISTS capabilities (
+	// 	fqn TEXT PRIMARY KEY,
+	// 	service_name TEXT NOT NULL,
+	// 	tool_name TEXT NOT NULL,
+	// 	description TEXT,
+	// 	target_url TEXT NOT NULL,
+	// 	input_schema JSONB,
+	// 	embedding VECTOR(1536)
+	// );
+	// 	`)
+	// 	if err != nil {
+	// 		log.Fatalf("Failed to create capabilities table: %v\n", err)
+	// 	}
+	// 	log.Println("Capabilities table is ready.")
 
 	_, err = conn.Exec(context.Background(), `
 CREATE TABLE IF NOT EXISTS connected_services (
