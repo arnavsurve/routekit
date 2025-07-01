@@ -9,6 +9,7 @@
             margin: 0;
             padding: 0;
             color: #333;
+            background-color: #f9fafb;
         }
         .container {
             max-width: 1200px;
@@ -57,6 +58,7 @@
         .sidebar {
             width: 250px;
             padding-right: 30px;
+            flex-shrink: 0;
         }
         .sidebar ul {
             list-style: none;
@@ -73,7 +75,7 @@
             border-radius: 5px;
         }
         .sidebar a:hover {
-            background-color: #f8f9fa;
+            background-color: #f0f2f5;
         }
         .sidebar a.active {
             background-color: #e9ecef;
@@ -112,15 +114,16 @@
             cursor: pointer;
             font-size: 14px;
             text-decoration: none;
+            text-align: center;
         }
         .btn:hover {
             background-color: #0069d9;
         }
-        .btn-secondary {
-            background-color: #6c757d;
+        .btn-danger {
+            background-color: #dc3545;
         }
-        .btn-secondary:hover {
-            background-color: #5a6268;
+        .btn-danger:hover {
+            background-color: #c82333;
         }
         .form-group {
             margin-bottom: 15px;
@@ -177,16 +180,12 @@
         .close:hover {
             color: #007bff;
         }
-        .connector-status {
-            display: flex;
-            align-items: center;
-            margin-top: 10px;
-        }
         .status-indicator {
             width: 10px;
             height: 10px;
             border-radius: 50%;
             margin-right: 8px;
+            display: inline-block;
         }
         .status-connected {
             background-color: #28a745;
@@ -203,13 +202,6 @@
         }
         .connector-info:last-child {
             border-bottom: none;
-        }
-        .connector-details {
-            flex: 1;
-        }
-        .connector-actions {
-            display: flex;
-            gap: 10px;
         }
         .hidden {
             display: none;
@@ -247,11 +239,8 @@
                         <div class="card-header">
                             <h2>Connected Services</h2>
                         </div>
-                        <div id="github-connection-status">
-                            <!-- This will be populated by JavaScript -->
-                        </div>
-                        <div class="connector-actions" style="margin-top: 20px;">
-                            <button id="connect-github-btn" class="btn">Connect GitHub</button>
+                        <div id="connectors-list">
+                            <!-- Connector statuses will be dynamically inserted here -->
                         </div>
                     </div>
                 </div>
@@ -259,18 +248,14 @@
                 <!-- Other sections (hidden by default) -->
                 <div id="profile-section" class="settings-section hidden">
                     <div class="card">
-                        <div class="card-header">
-                            <h2>Profile Settings</h2>
-                        </div>
+                        <h2>Profile Settings</h2>
                         <p>Profile settings will be available soon.</p>
                     </div>
                 </div>
 
                 <div id="preferences-section" class="settings-section hidden">
                     <div class="card">
-                        <div class="card-header">
-                            <h2>Preferences</h2>
-                        </div>
+                        <h2>Preferences</h2>
                         <p>Preference settings will be available soon.</p>
                     </div>
                 </div>
@@ -283,174 +268,154 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h3>Connect GitHub</h3>
-                <span class="close">&times;</span>
+                <span class="close" data-modal-id="github-modal">×</span>
             </div>
             <form id="github-form">
                 <div class="form-group">
                     <label for="github-pat">GitHub Personal Access Token (PAT)</label>
-                    <input type="password" id="github-pat" class="form-control" required>
+                    <input type="password" id="github-pat" class="form-control" placeholder="ghp_..." required>
                     <small>Enter your GitHub Personal Access Token. You can create one in your <a href="https://github.com/settings/personal-access-tokens" target="_blank">GitHub Settings</a>.</small>
                 </div>
                 <div class="form-group">
                     <button type="submit" class="btn">Connect</button>
-                    <button type="button" class="btn btn-secondary" id="cancel-github">Cancel</button>
                 </div>
             </form>
         </div>
     </div>
 
     <script>
-        // DOM Elements
-        const connectGitHubBtn = document.getElementById('connect-github-btn');
-        const githubModal = document.getElementById('github-modal');
-        const closeModal = document.querySelector('.close');
-        const cancelGitHub = document.getElementById('cancel-github');
-        const githubForm = document.getElementById('github-form');
-        const githubConnectionStatus = document.getElementById('github-connection-status');
-        const sidebarLinks = document.querySelectorAll('.sidebar a');
-        const settingsSections = document.querySelectorAll('.settings-section');
+        document.addEventListener('DOMContentLoaded', () => {
+            const connectorsList = document.getElementById('connectors-list');
 
-        // Check if GitHub is connected
-        async function checkGitHubConnection() {
-            try {
-                const response = await fetch(`/api/connectors/status`);
-                const data = await response.json();
-                if (!response.ok) throw new Error(data.error || 'Failed to get status');
-                const isConnected = data.github;
-                updateConnectionUI(isConnected);
-            } catch (error) {
-                console.error('Error checking GitHub connection:', error);
-                updateConnectionUI(false);
+            // --- Configuration for each connector ---
+            const connectorConfig = {
+                'github': {
+                    displayName: 'GitHub',
+                    connect: () => {
+                        document.getElementById('github-modal').style.display = 'block';
+                    },
+                },
+                'atlassian': {
+                    displayName: 'Atlassian (Jira/Confluence)',
+                    connect: () => {
+                        // Redirect to the backend which handles the full OAuth flow
+                        window.location.href = '/api/connectors/atlassian/connect';
+                    },
+                }
+            };
+
+            // --- Main function to fetch statuses and render the UI ---
+            async function fetchAndRenderStatuses() {
+                try {
+                    const response = await fetch('/api/connectors/status');
+                    if (!response.ok) throw new Error('Failed to fetch connector statuses');
+                    const statuses = await response.json();
+                    
+                    connectorsList.innerHTML = ''; // Clear existing list to prevent duplicates
+
+                    for (const serviceName in connectorConfig) {
+                        const config = connectorConfig[serviceName];
+                        // Get the status for the current service, defaulting to not connected
+                        const status = statuses[serviceName] || { connected: false };
+                        renderConnector(serviceName, config.displayName, status.connected);
+                    }
+                } catch (error) {
+                    console.error('Error fetching connector statuses:', error);
+                    connectorsList.innerHTML = '<p>Could not load connector statuses. Please try again later.</p>';
+                }
             }
-        }
 
-        function updateConnectionUI(isConnected) {
-            if (isConnected) {
-                githubConnectionStatus.innerHTML = `
-                <div class="connector-info">
-                    <div class="connector-details">
-                        <h3>GitHub</h3>
-                        <div class="connector-status">
-                            <div class="status-indicator status-connected"></div>
-                            <span>Connected</span>
+            // --- Renders a single connector's status and actions ---
+            function renderConnector(serviceName, displayName, isConnected) {
+                const isConnectedClass = isConnected ? 'status-connected' : 'status-disconnected';
+                const isConnectedText = isConnected ? 'Connected' : 'Disconnected';
+                const buttonClass = isConnected ? 'btn-danger' : 'btn';
+                const buttonText = isConnected ? 'Disconnect' : 'Connect';
+
+                const connectorHtml = `
+                    <div class="connector-info" data-service="${serviceName}">
+                        <div>
+                            <h3>${displayName}</h3>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <div class="status-indicator ${isConnectedClass}"></div>
+                                <span>${isConnectedText}</span>
+                            </div>
+                        </div>
+                        <div class="connector-actions">
+                            <button class="btn ${buttonClass}" data-action="${isConnected ? 'disconnect' : 'connect'}">${buttonText}</button>
                         </div>
                     </div>
-                    <div class="connector-actions">
-                        <button class="btn btn-secondary" id="disconnect-github">Disconnect</button>
-                    </div>
-                </div>
                 `;
-                document.getElementById('disconnect-github').addEventListener('click', disconnectGitHub);
-                connectGitHubBtn.textContent = 'Reconnect GitHub';
-            } else {
-                githubConnectionStatus.innerHTML = `
-                <div class="connector-info">
-                    <div class="connector-details">
-                        <h3>GitHub</h3>
-                        <div class="connector-status">
-                            <div class="status-indicator status-disconnected"></div>
-                            <span>Disconnected</span>
-                        </div>
-                    </div>
-                    <div class="connector-actions">
-                        <button class="btn btn-primary" id="connect-github">Connect</button>
-                    </div>
-                </div>
-                `;
-                connectGitHubBtn.textContent = 'Connect GitHub';
+                connectorsList.insertAdjacentHTML('beforeend', connectorHtml);
             }
-        }
 
-        // Connect GitHub
-        async function connectGitHub(event) {
-            event.preventDefault();
-            const githubPat = document.getElementById('github-pat').value;
-            if (!githubPat) {
-                alert('Please enter your GitHub Personal Access Token');
-                return;
-            }
-            
-            try {
-                const response = await fetch('/api/connectors/github', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ token: githubPat })
-                });
-                const data = await response.json();
-                if (!response.ok) throw new Error(data.error || 'Connection failed');
+            // --- Event delegation for all connector buttons ---
+            connectorsList.addEventListener('click', (e) => {
+                if (e.target.tagName !== 'BUTTON') return;
+
+                const action = e.target.dataset.action;
+                const serviceName = e.target.closest('.connector-info').dataset.service;
                 
-                githubModal.style.display = 'none';
-                checkGitHubConnection();
-                githubForm.reset();
-
-            } catch (error) {
-                alert('Failed to connect GitHub: ' + error.message);
-            }
-        }
-
-        // Disconnect GitHub
-        async function disconnectGitHub() {
-            if (!confirm('Are you sure you want to disconnect your GitHub account?')) return;
-            try {
-                const response = await fetch('/api/connectors/github', { method: 'DELETE' });
-                 const data = await response.json();
-                if (!response.ok) throw new Error(data.error || 'Disconnection failed');
-
-                checkGitHubConnection();
-
-            } catch (error) {
-                alert('Failed to disconnect GitHub: ' + error.message);
-            }
-        }
-
-        // Switch between settings sections
-        function switchSection(sectionId) {
-            settingsSections.forEach(section => {
-                section.classList.add('hidden');
-            });
-            
-            document.getElementById(`${sectionId}-section`).classList.remove('hidden');
-            
-            sidebarLinks.forEach(link => {
-                link.classList.remove('active');
-                if (link.dataset.section === sectionId) {
-                    link.classList.add('active');
+                if (action === 'connect') {
+                    connectorConfig[serviceName].connect();
+                } else if (action === 'disconnect') {
+                    disconnectService(serviceName);
                 }
             });
-        }
 
-        // Event Listeners
-        connectGitHubBtn.addEventListener('click', () => {
-            githubModal.style.display = 'block';
-        });
+            // --- Generic function to disconnect a service ---
+            async function disconnectService(serviceName) {
+                const displayName = connectorConfig[serviceName].displayName;
+                if (!confirm(`Are you sure you want to disconnect your ${displayName} account?`)) return;
 
-        closeModal.addEventListener('click', () => {
-            githubModal.style.display = 'none';
-        });
-
-        cancelGitHub.addEventListener('click', () => {
-            githubModal.style.display = 'none';
-        });
-
-        githubForm.addEventListener('submit', connectGitHub);
-
-        sidebarLinks.forEach(link => {
-            link.addEventListener('click', (e) => {
-                e.preventDefault();
-                switchSection(link.dataset.section);
-            });
-        });
-
-        // Close modal when clicking outside
-        window.addEventListener('click', (e) => {
-            if (e.target === githubModal) {
-                githubModal.style.display = 'none';
+                try {
+                    const response = await fetch(`/api/connectors/${serviceName}`, { method: 'DELETE' });
+                    if (!response.ok) throw new Error(`Failed to disconnect ${displayName}`);
+                    await fetchAndRenderStatuses(); // Refresh the entire UI
+                } catch (error) {
+                    alert(`Error: ${error.message}`);
+                }
             }
-        });
 
-        // Initialize
-        document.addEventListener('DOMContentLoaded', () => {
-            checkGitHubConnection();
+            // --- GitHub-specific PAT form handling ---
+            document.getElementById('github-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const githubPatInput = document.getElementById('github-pat');
+                if (!githubPatInput.value) {
+                    alert('Please enter your GitHub Personal Access Token');
+                    return;
+                }
+                
+                try {
+                    const response = await fetch('/api/connectors/github', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ token: githubPatInput.value })
+                    });
+                    if (!response.ok) throw new Error('Failed to connect GitHub. Please check your token and try again.');
+                    
+                    document.getElementById('github-modal').style.display = 'none';
+                    githubPatInput.value = ''; // Clear the input after submission
+                    await fetchAndRenderStatuses();
+                } catch (error) {
+                    alert(`Error: ${error.message}`);
+                }
+            });
+            
+            // --- General modal closing logic ---
+            document.querySelectorAll('.modal .close').forEach(closeBtn => {
+                closeBtn.addEventListener('click', () => {
+                    document.getElementById(closeBtn.dataset.modalId).style.display = 'none';
+                });
+            });
+            window.addEventListener('click', (e) => {
+                if (e.target.classList.contains('modal')) {
+                    e.target.style.display = 'none';
+                }
+            });
+
+            // --- Initial page load ---
+            fetchAndRenderStatuses();
         });
     </script>
 </body>

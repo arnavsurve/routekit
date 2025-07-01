@@ -9,23 +9,10 @@ import (
 	"github.com/arnavsurve/routekit/apps/web/backend/connectors"
 	"github.com/arnavsurve/routekit/pkg/crypto"
 	"github.com/arnavsurve/routekit/pkg/db"
-	"github.com/gorilla/websocket"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
-
-type App struct {
-	dbPool    *pgxpool.Pool
-	jwtSecret []byte
-}
-
-const gatewayURL = "http://localhost:8080/mcp"
-
-var upgrader = websocket.Upgrader{}
-
-const jwtExpirationHours = 24
 
 func main() {
 	if err := godotenv.Load(); err != nil {
@@ -75,10 +62,25 @@ func main() {
 
 	// Connector routes
 	connectorManager := connectors.NewManager()
+
+	// GitHub connector
 	connectorManager.Register(connectors.NewGitHubConnector(appDB))
 
+	// Atlassian connector
+	atlassianConnector := connectors.NewAtlassianConnector(appDB)
+	connectorManager.Register(atlassianConnector)
+
 	connectorRoutes := api.Group("/connectors")
+	// For each connector, registerRoutes provides:
+	// - POST connect
+	// - DELETE disconnect
 	connectorManager.RegisterRoutes(connectorRoutes)
+
+	api.GET("/connectors/atlassian/connect", atlassianConnector.Connect)
+	api.GET("/connectors/atlassian/callback", atlassianConnector.Callback)
+
+	// Connectors status
+	api.GET("/connectors/status", connectorManager.HandleGetAllStatuses)
 
 	// WebSocket route
 	e.GET("/ws", agent.HandleWebSocket, authHandler.AuthMiddleware)

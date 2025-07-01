@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 
+	"github.com/arnavsurve/routekit/pkg/config"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/pgvector/pgvector-go"
@@ -15,36 +17,28 @@ import (
 
 const DSN = "postgres://routekit:routekit@localhost:5433/routekit?sslmode=disable"
 
-type Service struct {
-	Name string
-	URL  string
-}
-
 type Registry struct {
-	db           *pgxpool.Pool
-	openaiClient *openai.Client
-	services     []Service
+	db       *pgxpool.Pool
+	services map[string]config.ServiceConfig
+	mu       sync.RWMutex
 }
 
 func New(dbPool *pgxpool.Pool) *Registry {
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		log.Fatalf("Registry: OPENAI_API_KEY environment variable is not set.\n")
+	cfg, err := config.Load("routekit.yml")
+	if err != nil {
+		log.Fatalf("Registry: failed to load routekit.yml: %v", err)
 	}
 
-	services := []Service{
-		{Name: "crm-service", URL: "http://localhost:8083/mcp"},
-		{Name: "kb-service", URL: "http://localhost:8084/mcp"},
-		{Name: "devops-service", URL: "http://localhost:8085/mcp"},
-		{Name: "support-service", URL: "http://localhost:8086/mcp"},
-		{Name: "bug-tracker-service", URL: "http://localhost:8087/mcp"},
-		{Name: "github", URL: "https://api.githubcopilot.com/mcp/"},
+	serviceMap := make(map[string]config.ServiceConfig)
+	for _, service := range cfg.Services {
+		serviceMap[service.Name] = service
 	}
+
+	log.Printf("Registry: loaded %d services from config.", len(serviceMap))
 
 	return &Registry{
-		db:           dbPool,
-		openaiClient: openai.NewClient(apiKey),
-		services:     services,
+		db:       dbPool,
+		services: serviceMap,
 	}
 }
 
@@ -54,7 +48,7 @@ func (r *Registry) Close() {
 
 // createEmbedding uses the OpenAI API to create an embedding for the given text.
 func (r *Registry) createEmbedding(ctx context.Context, text string) ([]float32, error) {
-	resp, err := r.openaiClient.CreateEmbeddings(ctx, openai.EmbeddingRequest{
+	resp, err := openai.NewClient(os.Getenv("OPENAI_API_KEY")).CreateEmbeddings(ctx, openai.EmbeddingRequest{
 		Input: []string{text},
 		Model: openai.AdaEmbeddingV2,
 	})
@@ -65,12 +59,19 @@ func (r *Registry) createEmbedding(ctx context.Context, text string) ([]float32,
 }
 
 // GetServices returns the list of configured downstream services.
-func (r *Registry) GetServices() []Service {
-	return r.services
+func (r *Registry) GetServices() []config.ServiceConfig {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	services := make([]config.ServiceConfig, 0, len(r.services))
+	for _, s := range r.services {
+		services = append(services, s)
+	}
+	return services
 }
 
 // RegisterCapabilities creates embeddings for discovered tools and stores them in the database.
 func (r *Registry) RegisterCapabilities(ctx context.Context, serviceName, serviceURL string, tools []mcp.Tool) {
+	log.Printf("Registry: Registering %d tools for service %q", len(tools), serviceName)
 	for _, tool := range tools {
 		fqn := fmt.Sprintf("%s__%s", serviceName, tool.Name)
 		embeddingText := fmt.Sprintf("Tool: %s. Description: %s", tool.Name, tool.Description)
@@ -116,7 +117,7 @@ func (r *Registry) SearchCapabilities(ctx context.Context, query string) ([]mcp.
 	rows, err := r.db.Query(ctx, `
 		SELECT fqn, service_name, description, input_schema
 		FROM capabilities
-		ORDER BY embedding <=> $1
+		ORDER BY embedding <-> $1
 		LIMIT 5;
 	`, pgvector.NewVector(queryEmbedding))
 	if err != nil {
@@ -195,12 +196,15 @@ func (r *Registry) GetAllCapabilities(ctx context.Context) ([]mcp.Tool, error) {
 	return results, nil
 }
 
-func (r *Registry) Resolve(ctx context.Context, fqn string) (string, bool) {
-	var targetURL string
-	err := r.db.QueryRow(ctx, "SELECT target_url FROM capabilities WHERE fqn = $1", fqn).Scan(&targetURL)
+func (r *Registry) Resolve(ctx context.Context, fqn string) (config.ServiceConfig, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var serviceName string
+	err := r.db.QueryRow(ctx, "SELECT service_name FROM capabilities WHERE fqn = $1", fqn).Scan(&serviceName)
 	if err != nil {
 		// pgx.ErrNoRows is expected when not found
-		return "", false
+		return config.ServiceConfig{}, false
 	}
-	return targetURL, true
+	service, found := r.services[serviceName]
+	return service, found
 }

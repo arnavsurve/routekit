@@ -14,7 +14,7 @@ type Connector interface {
 	// Disconnect handles the logic for disconnecting a user's account.
 	Disconnect(c echo.Context) error
 	// GetStatus returns the connection status for the current user.
-	GetStatus(c echo.Context) bool
+	GetStatus(c echo.Context) (map[string]any, error)
 }
 
 type App struct {

@@ -22,6 +22,7 @@ import (
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"golang.org/x/oauth2"
 )
 
 type Claims struct {
@@ -36,7 +37,6 @@ type GatewayServer struct {
 	jwtSecret []byte
 }
 
-// A context key for passing the userID
 type contextKey string
 
 const userIDKey contextKey = "user_id"
@@ -111,9 +111,9 @@ func (gw *GatewayServer) discoverAndRegisterTools(ctx context.Context) error {
 
 	for _, service := range services {
 		wg.Add(1)
-		go func(s registry.Service) {
+		go func(s config.ServiceConfig) {
 			defer wg.Done()
-			log.Printf("Gateway: Discovering tools from %q at %s", s.Name, s.URL)
+			log.Printf("Gateway: Discovering tools from %q via %s at %s", s.Name, s.Transport, s.URL)
 
 			var discoveryAuthToken string
 			if s.Name == "github" {
@@ -124,7 +124,7 @@ func (gw *GatewayServer) discoverAndRegisterTools(ctx context.Context) error {
 				}
 			}
 
-			downstreamClient, err := gw.getDownstreamClient(s.URL, discoveryAuthToken)
+			downstreamClient, err := gw.createClientForService(s, discoveryAuthToken)
 			if err != nil {
 				log.Printf("Gateway: ERROR connecting to %s: %v", s.Name, err)
 				return
@@ -142,38 +142,6 @@ func (gw *GatewayServer) discoverAndRegisterTools(ctx context.Context) error {
 	wg.Wait()
 	log.Println("Gateway: Discovery complete. Registry is populated.")
 	return nil
-}
-
-// getDownstreamClient is a helper to manage clients. It dynamically adds the auth token if one is provided.
-// For now, it just creates a new client. In production, this should use a connection pool/cache.
-func (gw *GatewayServer) getDownstreamClient(targetURL, authToken string) (*client.Client, error) {
-	// TODO: Implement client caching using gw.clientCache
-	var opts []transport.StreamableHTTPCOption
-	if authToken != "" {
-		opts = append(opts, transport.WithHTTPHeaders(map[string]string{
-			"Authorization": fmt.Sprintf("Bearer %s", authToken),
-		}))
-	}
-
-	c, err := client.NewStreamableHttpClient(targetURL, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create client for %s: %w", targetURL, err)
-	}
-
-	initCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, err = c.Initialize(initCtx, mcp.InitializeRequest{
-		Params: struct {
-			ProtocolVersion string                 `json:"protocolVersion"`
-			Capabilities    mcp.ClientCapabilities `json:"capabilities"`
-			ClientInfo      mcp.Implementation     `json:"clientInfo"`
-		}{ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION},
-	})
-	if err != nil {
-		c.Close()
-		return nil, fmt.Errorf("failed to initialize connection: %w", err)
-	}
-	return c, nil
 }
 
 func (gw *GatewayServer) createClientForService(service config.ServiceConfig, authToken string) (*client.Client, error) {
@@ -248,8 +216,7 @@ func (gw *GatewayServer) createClientForService(service config.ServiceConfig, au
 // while others like SSE and StreamableHTTP require an explicit `Start()` call.
 // We can check the transport type to be safe.
 func needsStart(c *client.Client) bool {
-	trans := c.GetTransport()
-	switch trans.(type) {
+	switch c.GetTransport().(type) {
 	case *transport.Stdio:
 		return false
 	default:
@@ -258,7 +225,6 @@ func needsStart(c *client.Client) bool {
 }
 
 type SearchResult struct {
-	// Instruction string `json:"instruction"`
 	Tools []mcp.Tool `json:"tools"`
 }
 
@@ -283,7 +249,6 @@ func (gw *GatewayServer) handleSearchTools(ctx context.Context, req mcp.CallTool
 	}
 
 	searchResult := SearchResult{
-		// Instruction: "To use a tool, call the 'routekit_execute' tool with the desired 'tool_name' and 'tool_args'.",
 		Tools: foundTools,
 	}
 
@@ -318,7 +283,8 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 	originalToolName := nameParts[1]
 
 	var downstreamAuthToken string
-	if serviceName == "github" {
+	switch serviceName {
+	case "github":
 		var encryptedPat []byte
 		err := gw.db.QueryRow(ctx, "SELECT credentials_encrypted FROM connected_services WHERE user_id = $1 AND service_name = 'github'", userID).Scan(&encryptedPat)
 		if err != nil {
@@ -335,18 +301,42 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 			return mcp.NewToolResultError("internal encryption error: " + err.Error()), nil
 		}
 		downstreamAuthToken = string(decryptedPat)
+
+	case "atlassian":
+		var encryptedTokens []byte
+		err := gw.db.QueryRow(ctx, "SELECT credentials_encrypted FROM connected_services WHERE user_id = $1 AND service_name = 'atlassian'", userID).Scan(&encryptedTokens)
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				return mcp.NewToolResultError("Atlassian not connected. Please connect your Atlassian account in settings."), nil
+			}
+			return mcp.NewToolResultError("internal database error: " + err.Error()), nil
+		}
+
+		decryptedTokens, err := crypto.Decrypt(encryptedTokens)
+		if err != nil {
+			return mcp.NewToolResultError("internal encryption error: " + err.Error()), nil
+		}
+
+		var token oauth2.Token
+		if err := json.Unmarshal(decryptedTokens, &token); err != nil {
+			return mcp.NewToolResultError("internal token error: " + err.Error()), nil
+		}
+
+		downstreamAuthToken = token.AccessToken
+	default:
+		return mcp.NewToolResultError("unknown service: " + serviceName), nil
 	}
 
-	targetURL, found := gw.registry.Resolve(ctx, fqn)
+	serviceConfig, found := gw.registry.Resolve(ctx, fqn)
 	if !found {
 		log.Printf("Gateway: Capability %q not found in registry", fqn)
 		return mcp.NewToolResultError(fmt.Sprintf("Unknown capability: %s. Please use routekit__search_tools to find available tools.", fqn)), nil
 	}
-	log.Printf("Gateway: Routing tool call %q to %s", fqn, targetURL)
+	log.Printf("Gateway: Routing tool call %q to service %s", fqn, serviceConfig.Name)
 
-	downstreamClient, err := gw.getDownstreamClient(targetURL, downstreamAuthToken)
+	downstreamClient, err := gw.createClientForService(serviceConfig, downstreamAuthToken)
 	if err != nil {
-		log.Printf("Gateway: ERROR - Failed to create client for %q at %s: %v", fqn, targetURL, err)
+		log.Printf("Gateway: ERROR - Failed to create client for %q: %v", fqn, err)
 		return mcp.NewToolResultError("internal routing error: " + err.Error()), nil
 	}
 	defer downstreamClient.Close()

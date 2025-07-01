@@ -25,7 +25,6 @@ func (m *Manager) Register(connector Connector) {
 func (m *Manager) RegisterRoutes(g *echo.Group) {
 	g.POST("/:service", m.handleConnect)
 	g.DELETE("/:service", m.handleDisconnect)
-	g.GET("/status", m.handleGetAllStatuses)
 }
 
 func (m *Manager) getConnector(serviceName string) (Connector, error) {
@@ -56,10 +55,17 @@ func (m *Manager) handleDisconnect(c echo.Context) error {
 	return connector.Disconnect(c)
 }
 
-func (m *Manager) handleGetAllStatuses(c echo.Context) error {
+func (m *Manager) HandleGetAllStatuses(c echo.Context) error {
 	statuses := make(map[string]any)
 	for name, connector := range m.connectors {
-		statuses[name] = connector.GetStatus(c)
+		status, err := connector.GetStatus(c)
+		if err != nil {
+			c.Logger().Errorf("Failed to get status for connector %s: %v", name, err)
+			statuses[name] = map[string]any{"connected": false, "error": "failed to retrieve status"}
+		} else {
+			statuses[name] = status
+		}
+
 	}
 	return c.JSON(http.StatusOK, statuses)
 }

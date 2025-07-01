@@ -1,0 +1,37 @@
+version: 1
+services:
+  # - name: user-service
+  #   transport: streamable-http
+  #   url: http://localhost:8081/mcp
+
+  # - name: inventory-service
+  #   transport: streamable-http
+  #   url: http://localhost:8082/mcp
+
+  # - name: crm-service
+  #   transport: streamable-http
+  #   url: http://localhost:8083/mcp
+
+  # - name: kb-service
+  #   transport: streamable-http
+  #   url: http://localhost:8084/mcp
+
+  # - name: devops-service
+  #   transport: streamable-http
+  #   url: http://localhost:8085/mcp
+
+  # - name: support-service
+  #   transport: streamable-http
+  #   url: http://localhost:8086/mcp
+
+  # - name: bug-tracker-service
+  #   transport: streamable-http
+  #   url: http://localhost:8087/mcp
+
+  - name: github
+    transport: streamable-http
+    url: https://api.githubcopilot.com/mcp
+  
+  - name: atlassian
+    transport: sse
+    url: https://mcp.atlassian.com/v1/sse

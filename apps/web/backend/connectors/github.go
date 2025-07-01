@@ -46,7 +46,7 @@ func (g *GitHubConnector) Connect(c echo.Context) error {
 		VALUES ($1, $2, $3)
 		ON CONFLICT (user_id, service_name) DO UPDATE SET
 			credentials_encrypted = EXCLUDED.credentials_encrypted;
-	`, userID, "github", encryptedToken)
+	`, userID, g.ServiceName(), encryptedToken)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to save connection"})
 	}
@@ -73,7 +73,7 @@ func (g *GitHubConnector) Disconnect(c echo.Context) error {
 	})
 }
 
-func (g *GitHubConnector) GetStatus(c echo.Context) bool {
+func (g *GitHubConnector) GetStatus(c echo.Context) (map[string]any, error) {
 	user := c.Get("user").(*jwt.Token)
 	claims := user.Claims.(*auth.Claims)
 	userID := claims.UserID
@@ -81,10 +81,10 @@ func (g *GitHubConnector) GetStatus(c echo.Context) bool {
 	var count int
 	err := g.app.DBPool.QueryRow(context.Background(),
 		"SELECT COUNT(*) FROM connected_services WHERE user_id = $1 AND service_name = $2",
-		userID, "github").Scan(&count)
+		userID, g.ServiceName()).Scan(&count)
 	if err != nil {
-		return false
+		return nil, err
 	}
 
-	return count > 0
+	return map[string]any{"connected": count > 0}, nil
 }
