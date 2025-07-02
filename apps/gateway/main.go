@@ -116,60 +116,31 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 	var c *client.Client
 	var err error
 
-	tokenStore := rk_mcp.NewGatewayTokenStore(gw.db, userID, service.Name)
+	if service.Transport == "sse" || service.Transport == "streamable-http" {
+		tokenStore := rk_mcp.NewGatewayTokenStore(gw.db, userID, service.Name)
 
-	initialToken, err := tokenStore.GetToken()
-	if err != nil {
-		if err == transport.ErrOAuthAuthorizationRequired {
-			return nil, transport.ErrOAuthAuthorizationRequired
-		}
-		return nil, err
-	}
-
-	oauthConfig := transport.OAuthConfig{
-		ClientID:     os.Getenv(strings.ToUpper(service.Name) + "_CLIENT_ID"),
-		ClientSecret: os.Getenv(strings.ToUpper(service.Name) + "_CLIENT_SECRET"),
-		TokenStore:   tokenStore,
-		// The other fields like RedirectURI are handled by the Routekit web app, not the gateway.
-	}
-
-	headers := make(map[string]string)
-	if initialToken != nil && !initialToken.IsExpired() {
-		headers["Authorization"] = "Bearer " + initialToken.AccessToken
-	}
-
-	switch service.Transport {
-	case "streamable-http":
-		if service.URL == "" {
-			return nil, fmt.Errorf("URL is required for streamable-http transport")
-		}
-		c, err = client.NewStreamableHttpClient(service.URL, transport.WithHTTPHeaders(headers))
-
-	case "sse":
-		if service.URL == "" {
-			return nil, fmt.Errorf("URL is required for sse transport")
+		oauthConfig := transport.OAuthConfig{
+			ClientID:     os.Getenv(strings.ToUpper(service.Name) + "_CLIENT_ID"),
+			ClientSecret: os.Getenv(strings.ToUpper(service.Name) + "_CLIENT_SECRET"),
+			TokenStore:   tokenStore,
 		}
 
-		c, err = client.NewOAuthSSEClient(service.URL, oauthConfig, transport.WithHeaders(headers))
-
-	case "stdio":
-		if len(service.Command) == 0 {
-			return nil, fmt.Errorf("command is required for stdio transport")
+		if service.Transport == "sse" {
+			c, err = client.NewOAuthSSEClient(service.URL, oauthConfig)
+		} else {
+			c, err = client.NewOAuthStreamableHttpClient(service.URL, oauthConfig)
 		}
-		// stdio transport doesn't support this OAuth flow. We can pass the token via env vars if needed.
+	} else if service.Transport == "stdio" && service.Name == "github" {
+		// GitHub PAT is a special case, not OAuth. THANK YOU GITHUB UNMATCHED DEVEX THANK YOU
 		githubPat, err := gw.getGitHubPat(ctx, userID)
 		if err != nil {
 			return nil, err
 		}
 		env := []string{"GITHUB_TOKEN=" + githubPat}
 		c, err = client.NewStdioMCPClient(service.Command[0], env, service.Command[1:]...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create stdio client for service %s: %w", service.Name, err)
-		}
-	default:
-		return nil, fmt.Errorf("unknown transport %q", service.Transport)
+	} else {
+		return nil, fmt.Errorf("unknown or unsupported transport/service combination: %s/%s", service.Name, service.Transport)
 	}
-
 	if err != nil {
 		return nil, fmt.Errorf("failed to create client for service %s: %w", service.Name, err)
 	}
@@ -181,10 +152,10 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 		startErr := c.Start(initCtx)
 		if client.IsOAuthAuthorizationRequiredError(startErr) {
 			c.Close()
-			return nil, fmt.Errorf(
-				"authorization required for service %s. The user's token may be missing or expired, and a refresh failed. Please ask the user to reconnect the service in their settings",
-				service.Name,
-			)
+			// This is not an error but a specific instruction.
+			// We tell the agent that user interaction is required.
+			// The agent's frontend (Routekit web UI) can parse this structured response.
+			return nil, fmt.Errorf(`{"error_type": "re_authentication_required", "service_name": "%s", "message": "The connection to %s requires you to re-authenticate. Please go to your settings and reconnect the service."}`, service.Name, service.Name)
 		}
 		if startErr != nil {
 			c.Close()
@@ -391,6 +362,13 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 		return mcp.NewToolResultErrorf("Unknown service in tool name: %s", serviceName), nil
 	}
 
+	downstreamClient, err := gw.createClientForService(ctx, userID, serviceConfig)
+	if err != nil {
+		log.Printf("Gateway: ERROR - Failed to create client for %q: %v", fqn, err)
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	defer downstreamClient.Close()
+
 	// cloudId injection for Atlassian
 	if serviceName == "atlassian" {
 		if originalToolName != "getAccessibleAtlassianResources" {
@@ -421,23 +399,16 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 
 	log.Printf("Gateway: Routing tool call %q to service %s", fqn, serviceConfig.Name)
 
-	downstreamClient, err := gw.createClientForService(ctx, userID, serviceConfig)
-	if err != nil {
-		log.Printf("Gateway: ERROR - Failed to create client for %q: %v", fqn, err)
-		return mcp.NewToolResultError(err.Error()), nil
+	downstreamReq := mcp.CallToolRequest{
+		Params: mcp.CallToolParams{
+			Name:      originalToolName,
+			Arguments: args,
+		},
 	}
-	defer downstreamClient.Close()
 
-	downstreamReq := mcp.CallToolRequest{}
-	downstreamReq.Params.Name = originalToolName
-	downstreamReq.Params.Arguments = args
-
-	log.Printf("Gateway: Forwarding request for tool %q to downstream service...", downstreamReq.Params.Name)
 	return downstreamClient.CallTool(ctx, downstreamReq)
 }
 
-// discoverUserCloudId uses the user's credentials to call the `getAccessibleAtlassianResources` tool
-// and extracts the first cloudId from the result.
 func (gw *GatewayServer) discoverUserCloudId(ctx context.Context, userID string, authToken string) (string, error) {
 	const getResourcesToolFQN = "atlassian__getAccessibleAtlassianResources"
 	serviceConfig, found := gw.registry.GetServiceConfig("atlassian")
