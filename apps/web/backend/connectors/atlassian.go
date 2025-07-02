@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -50,14 +51,25 @@ func (a *AtlassianConnector) Connect(c echo.Context) error {
 		"prompt":        {"consent"},
 	}.Encode()
 
+	c.Logger().Info("Redirecting to Atlassian auth URL: %s", authURL)
+
 	return c.Redirect(http.StatusTemporaryRedirect, authURL)
 }
 
 // Callback handles the redirect from Atlassian, exchanges the code for tokens,
 // and stores them in the database.
 func (a *AtlassianConnector) Callback(c echo.Context) error {
+	c.Logger().Info("Received callback from Atlassian. Full request URI: %s", c.Request().RequestURI)
+
 	code := c.QueryParam("code")
+	authError := c.QueryParam("error")
+	authErrorDesc := c.QueryParam("error_description")
+	if authError != "" {
+		c.Logger().Errorf("Atlassian returned an error on callback: %s - %s", authError, authErrorDesc)
+		return c.String(http.StatusBadRequest, "Atlassian returned an error: "+authError)
+	}
 	if code == "" {
+		c.Logger().Error("Authorization code is missing from Atlassian callback.")
 		return c.String(http.StatusBadRequest, "Authorization code is missing.")
 	}
 
@@ -102,6 +114,11 @@ func (a *AtlassianConnector) exchangeCodeForToken(ctx context.Context, code, req
 		"redirect_uri":  {redirectURI},
 	}
 
+	log.Println("--- Preparing to exchange code for Atlassian token ---")
+	log.Printf("Token Endpoint: %s", "https://auth.atlassian.com/oauth/token")
+	log.Printf("Request Body (form-urlencoded): %s", data.Encode())
+	log.Println("-----------------------------------------------------")
+
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://auth.atlassian.com/oauth/token", strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, err
@@ -114,10 +131,14 @@ func (a *AtlassianConnector) exchangeCodeForToken(ctx context.Context, code, req
 	}
 	defer resp.Body.Close()
 
+	log.Printf("Received status code %d from Atlassian token endpoint", resp.StatusCode)
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
+
+	log.Printf("Received response body from Atlassian: %s", string(body))
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("token exchange (Atlassian) failed: status %d, body %s", resp.StatusCode, string(body))

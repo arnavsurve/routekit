@@ -295,13 +295,13 @@
                         document.getElementById('github-modal').style.display = 'block';
                     },
                 },
-                // 'atlassian': {
-                //     displayName: 'Atlassian (Jira/Confluence)',
-                //     connect: () => {
-                //         // Redirect to the backend which handles the full OAuth flow
-                //         window.location.href = '/api/connectors/atlassian/connect';
-                //     },
-                // }
+                'atlassian': {
+                    displayName: 'Atlassian (Jira/Confluence)',
+                    connect: () => {
+                        // Redirect to the backend which handles the full OAuth flow
+                        window.location.href = '/api/connectors/atlassian/connect';
+                    },
+                }
             };
 
             // --- Main function to fetch statuses and render the UI ---
