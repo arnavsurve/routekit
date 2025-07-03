@@ -69,5 +69,19 @@ CREATE TABLE IF NOT EXISTS connected_services (
 	}
 	log.Println("Connected services table is ready.")
 
+	_, err = conn.Exec(context.Background(), `
+CREATE TABLE IF NOT EXISTS oauth_sessions (
+	state TEXT PRIMARY KEY,
+	code_verifier TEXT NOT NULL,
+	user_id UUID NOT NULL,
+	service_name TEXT NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+	`)
+	if err != nil {
+		log.Fatalf("Failed to create oauth_sessions table: %v\n", err)
+	}
+	log.Println("OAuth sessions table is ready.")
+
 	log.Println("Migration completed successfully.")
 }

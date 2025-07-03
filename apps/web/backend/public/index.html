@@ -111,7 +111,6 @@
         .tool-result { border-left-color: #4caf50; }
         .system-error { border-left-color: #f44336; }
         
-        /* Styles for the preview and expandable content */
         .preview-text {
             color: #555;
             padding-left: 0.5rem;
@@ -120,17 +119,34 @@
         }
         .details-summary {
             cursor: pointer;
-            outline: none; /* Removes the focus ring on click */
+            outline: none;
         }
         .details-summary::-webkit-details-marker {
             color: #555;
         }
         .expanded-content {
             margin-top: 0.75rem;
-            max-height: 15rem; /* Increased height for more content */
+            max-height: 15rem;
             overflow-y: auto;
             border-top: 1px solid #ddd;
             padding-top: 0.75rem;
+        }
+        /* NEW STYLES for the auth button */
+        .auth-button {
+            display: inline-block;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 15px;
+            text-decoration: none;
+            text-align: center;
+            margin-top: 10px;
+        }
+        .auth-button:hover {
+            background-color: #0056b3;
         }
     </style>
 </head>
@@ -160,7 +176,6 @@
             if (!userEmail) return;
         });
 
-        // Establish WebSocket connection
         const ws = new WebSocket(`ws://${window.location.host}/ws`);
 
         ws.onopen = () => {
@@ -188,8 +203,24 @@
                     appendToolResult(data.content.name, data.content.result, false);
                     break;
                 case 'system_error':
-                    appendToolResult(data.content.name, data.content.result, true);
+                    try {
+                        // Try to parse the error content as JSON.
+                        // The raw error string from the gateway is in the `result` field.
+                        const errorContent = JSON.parse(data.content.result);
+
+                        // Check if it's our special auth trigger message.
+                        if (errorContent.action_required === 'user_authentication') {
+                            appendAuthRequiredMessage(errorContent.service_name, errorContent.authorization_url);
+                        } else {
+                            // It's a structured error, but not for auth, display normally.
+                            appendToolResult(data.content.name, data.content.result, true);
+                        }
+                    } catch (e) {
+                        // It's just a regular string error, display as before.
+                        appendToolResult(data.content.name, data.content.result, true);
+                    }
                     break;
+                    // --- MODIFIED LOGIC END ---
                 default:
                     appendMessage("System", `Received unknown message type: ${data.type}`);
             }
@@ -223,9 +254,9 @@
         function tryParseJSON(str) {
             try {
                 const obj = JSON.parse(str);
-                return JSON.stringify(obj, null, 2); // Pretty print with 2 spaces
+                return JSON.stringify(obj, null, 2);
             } catch (e) {
-                return str; // Return original string if not valid JSON
+                return str;
             }
         }
 
@@ -233,56 +264,69 @@
             const item = document.createElement('div');
             item.className = isError ? 'system-error' : 'tool-result';
             
-            // 1. Create the preview text
-            // Try to parse and format JSON
             const formattedResult = tryParseJSON(result.toString());
             const lines = formattedResult.split('\n');
             const preview = lines.slice(0, 3).join('\n') + (lines.length > 3 ? '...' : '');
 
-            // 2. Create the container for the output section
-            const outputContainer = document.createElement('div');
-            
-            // 3. Create the <details> and <summary> elements
             const details = document.createElement('details');
             const summary = document.createElement('summary');
             summary.className = 'details-summary';
             summary.textContent = 'Output';
 
-            // 4. Create the preview span
             const previewSpan = document.createElement('span');
             previewSpan.className = 'preview-text';
             previewSpan.textContent = `: ${preview}`;
 
-            // 5. Create the full content pre element
             const fullContentPre = document.createElement('pre');
             fullContentPre.textContent = formattedResult;
             if (formattedResult !== result.toString()) {
-                // If it was valid JSON, add syntax highlighting
                 fullContentPre.className = 'expanded-content hljs language-json';
                 hljs.highlightElement(fullContentPre);
             } else {
                 fullContentPre.className = 'expanded-content';
             }
-            fullContentPre.className = 'expanded-content';
             
-            // Initially, only the summary and preview are visible together
             summary.appendChild(previewSpan);
             details.appendChild(summary);
             details.appendChild(fullContentPre);
 
-            // 6. Add event listener to hide/show preview
             details.addEventListener('toggle', (event) => {
                 if (details.open) {
-                    // When expanded, hide the preview text
                     previewSpan.style.display = 'none';
                 } else {
-                    // When collapsed, show the preview text
                     previewSpan.style.display = 'inline';
                 }
             });
 
             item.innerHTML = `<b>${isError ? 'System' : 'Tool'}:</b> → Result from <b>${name}</b>`;
             item.appendChild(details);
+            
+            messages.appendChild(item);
+            messages.scrollTop = messages.scrollHeight;
+        }
+        
+        function appendAuthRequiredMessage(serviceName, authUrl) {
+            const item = document.createElement('div');
+            item.className = 'system-error';
+
+            const p = document.createElement('p');
+            p.innerHTML = `The connection to <b>${serviceName}</b> requires your approval. Please click the button below to authenticate.`;
+
+            const button = document.createElement('a');
+            button.href = authUrl;
+            button.target = '_blank';
+            button.rel = 'noopener noreferrer';
+            button.className = 'auth-button';
+            button.textContent = `Authenticate with ${serviceName}`;
+            
+            const info = document.createElement('p');
+            info.style.marginTop = '10px';
+            info.style.fontSize = '12px';
+            info.textContent = 'After authenticating, you can close the new tab and try your request again here.';
+
+            item.appendChild(p);
+            item.appendChild(button);
+            item.appendChild(info);
             
             messages.appendChild(item);
             messages.scrollTop = messages.scrollHeight;

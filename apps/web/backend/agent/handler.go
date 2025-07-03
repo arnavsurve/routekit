@@ -227,7 +227,7 @@ func (h *SessionHandler) executeTools(ctx context.Context, blocks []anthropic.To
 		var resultText string
 		var isError bool
 		if err != nil {
-			resultText = fmt.Sprintf("Gateway call failed: %v", err)
+			resultText = err.Error()
 			isError = true
 		} else if result.IsError {
 			if len(result.Content) > 0 {

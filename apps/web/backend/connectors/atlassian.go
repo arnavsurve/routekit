@@ -62,6 +62,11 @@ func (a *AtlassianConnector) Callback(c echo.Context) error {
 	c.Logger().Info("Received callback from Atlassian. Full request URI: %s", c.Request().RequestURI)
 
 	code := c.QueryParam("code")
+	state := c.QueryParam("state")
+	if code == "" || state == "" {
+		return c.String(http.StatusBadRequest, "Authorization code or state is missing.")
+	}
+
 	authError := c.QueryParam("error")
 	authErrorDesc := c.QueryParam("error_description")
 	if authError != "" {
@@ -73,7 +78,20 @@ func (a *AtlassianConnector) Callback(c echo.Context) error {
 		return c.String(http.StatusBadRequest, "Authorization code is missing.")
 	}
 
-	tokenData, err := a.exchangeCodeForToken(c.Request().Context(), code, c.Request().Host)
+	var codeVerifier string
+	err := a.app.DBPool.QueryRow(context.Background(), "SELECT code_verifier FROM oauth_sessions WHERE state = $1", state).Scan(&codeVerifier)
+	if err != nil {
+		c.Logger().Errorf("Invalid or expired state parameter, possible CSRF attack or old link. Please try again. Error: %v", err)
+		return c.String(http.StatusBadRequest, "Invalid or expired state. Please try the authentication flow again.")
+	}
+	defer a.app.DBPool.Exec(context.Background(), "DELETE FROM oauth_sessions WHERE state = $1", state)
+
+	_, delErr := a.app.DBPool.Exec(context.Background(), "DELETE FROM oauth_sessions WHERE state = $1", state)
+	if delErr != nil {
+		c.Logger().Errorf("Failed to delete used oauth_session for state %s: %v", state, delErr)
+	}
+
+	tokenData, err := a.exchangeCodeForToken(c.Request().Context(), code, c.Request().Host, codeVerifier)
 	if err != nil {
 		c.Logger().Errorf("Atlassian token exchange failed: %v", err)
 		return c.String(http.StatusInternalServerError, "Failed to get token from Atlassian.")
@@ -103,7 +121,7 @@ func (a *AtlassianConnector) Callback(c echo.Context) error {
 	return c.Redirect(http.StatusFound, "/settings.html")
 }
 
-func (a *AtlassianConnector) exchangeCodeForToken(ctx context.Context, code, requestHost string) ([]byte, error) {
+func (a *AtlassianConnector) exchangeCodeForToken(ctx context.Context, code, requestHost string, codeVerifier string) ([]byte, error) {
 	redirectURI := fmt.Sprintf("http://%s/api/connectors/atlassian/callback", requestHost)
 
 	data := url.Values{
@@ -112,6 +130,7 @@ func (a *AtlassianConnector) exchangeCodeForToken(ctx context.Context, code, req
 		"client_secret": {os.Getenv("ATLASSIAN_CLIENT_SECRET")},
 		"code":          {code},
 		"redirect_uri":  {redirectURI},
+		"code_verifier": {codeVerifier},
 	}
 
 	log.Println("--- Preparing to exchange code for Atlassian token ---")
