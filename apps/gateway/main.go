@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -123,6 +125,97 @@ func (gw *GatewayServer) mcpAuthMiddleware(next server.ToolHandlerFunc) server.T
 	}
 }
 
+func (gw *GatewayServer) getRemoteClient(ctx context.Context, userID string, service config.ServiceConfig) (*client.Client, error) {
+	if service.Transport != "stdio" {
+		return nil, fmt.Errorf("getRemoteClient only supports stdio transport, but got %s for %s", service.Transport, service.Name)
+	}
+	if len(service.Command) == 0 {
+		return nil, fmt.Errorf("command is required for stdio transport for service %s", service.Name)
+	}
+
+	configDir := fmt.Sprintf("/tmp/routekit_auth/user_%s_service_%s", userID, service.Name)
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create auth config dir: %w", err)
+	}
+
+	env := []string{"MCP_REMOTE_CONFIG_DIR=" + configDir}
+
+	command := service.Command[0]
+	args := service.Command[1:]
+	c, err := client.NewStdioMCPClient(command, env, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	authURLChan := make(chan string)
+	errChan := make(chan error, 1)
+	stderr, ok := client.GetStderr(c)
+	if !ok {
+		c.Close()
+		return nil, fmt.Errorf("failed to get stderr from stdio client for %s", service.Name)
+	}
+
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		re := regexp.MustCompile(`Please authorize this client by visiting: (https?://\S+)`)
+		for scanner.Scan() {
+			line := scanner.Text()
+			log.Printf("Gatewat: [mcp-remote stderr] %s", line)
+			matches := re.FindStringSubmatch(line)
+			if len(matches) > 1 {
+				authURLChan <- matches[1]
+				return
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			errChan <- fmt.Errorf("failed to scan stderr from stdio client for %s: %w", service.Name, err)
+		}
+	}()
+
+	initCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var initErr error
+	initDone := make(chan struct{})
+	go func() {
+		_, initErr = c.Initialize(initCtx, mcp.InitializeRequest{
+			Params: mcp.InitializeParams{
+				ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
+			},
+		})
+		close(initDone)
+	}()
+
+	select {
+	case authURL := <-authURLChan:
+		log.Printf("Gateway: Intercepted auth URL for %s: %s", service.Name, authURL)
+		c.Close()
+		jsonResponse := fmt.Sprintf(
+			`{"action_required": "user_authentication", "service_name": "%s", "authorization_url": "%s"}`,
+			service.Name,
+			authURL,
+		)
+		return nil, errors.New(jsonResponse)
+
+	case <-initDone:
+		if initErr != nil {
+			c.Close()
+			return nil, fmt.Errorf("failed to initialize stdio client for %s: %w", service.Name, initErr)
+		}
+		log.Printf("Gateway: Successfully initialized client for %s without needing new auth.", service.Name)
+		return c, nil
+
+	case err := <-errChan:
+		c.Close()
+		return nil, err
+
+	case <-initCtx.Done():
+		c.Close()
+		return nil, fmt.Errorf("timeout waiting for stdio client initialization for %s", service.Name)
+	}
+}
+
 func (gw *GatewayServer) getOrCreateClient(ctx context.Context, userID string, service config.ServiceConfig) (*client.Client, error) {
 	cacheKey := userID + ":" + service.Name
 
@@ -224,12 +317,12 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 				var existingState, existingCodeVerifier string
 				err := gw.db.QueryRow(context.Background(), "SELECT state, code_verifier FROM oauth_sessions WHERE user_id = $1 AND service_name = $2", userID, service.Name).Scan(&existingState, &existingCodeVerifier)
 
-				if err == nil {
+				switch err {
+				case nil:
 					log.Printf("Gateway: Found existing auth challenge for user %s. Re-using state: %s", userID, existingState)
-
 					state = existingState
 					codeVerifier = existingCodeVerifier
-				} else if err == pgx.ErrNoRows {
+				case pgx.ErrNoRows:
 					state, _ = transport.GenerateState()
 					codeVerifier, _ = transport.GenerateCodeVerifier()
 
@@ -239,7 +332,7 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 						return nil, fmt.Errorf("failed to store OAuth session state: %w", dbErr)
 					}
 					log.Printf("Gateway: Saved auth state for user %s. State : %s", userID, state)
-				} else {
+				default:
 					return nil, fmt.Errorf("database error checking for auth session: %w", err)
 				}
 
@@ -411,20 +504,32 @@ func (gw *GatewayServer) discoverUserTools(ctx context.Context, userID string, s
 		go func(s config.ServiceConfig) {
 			defer wg.Done()
 
-			client, err := gw.getOrCreateClient(ctx, userID, s)
+			var c *client.Client
+			var err error
+
+			switch s.Name {
+			case "atlassian", "linear":
+				c, err = gw.getRemoteClient(ctx, userID, s)
+			case "github":
+				c, err = gw.getDirectClient(ctx, userID, s)
+			default:
+				log.Printf("Skipping discover for unconfigured service: %s", s.Name)
+				return
+			}
+
 			if err != nil {
 				if strings.Contains(err.Error(), "action_required") {
 					errChan <- err
 					return
 				}
-				log.Printf("Gateway: Failed to create client for %s dusing user discovery: %v", s.Name, err)
+				log.Printf("Gateway: Failed to create client for %s during discovery: %v", s.Name, err)
 				return
 			}
-			defer client.Close()
+			defer c.Close()
 
-			tools, err := client.ListTools(ctx, mcp.ListToolsRequest{})
+			tools, err := c.ListTools(ctx, mcp.ListToolsRequest{})
 			if err != nil {
-				log.Printf("Gateway: Failed to list tools from %s for user %s: %v. This is expected for Atlassian before a cloudId is known.", s.Name, userID, err)
+				log.Printf("Gateway: Failed to list tools from %s for user %s: %v", s.Name, userID, err)
 				return
 			}
 
@@ -478,13 +583,25 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 		return mcp.NewToolResultErrorf("Unknown service in tool name: %s", serviceName), nil
 	}
 
-	log.Printf("Gateway: Routing tool call %q to service %s", fqn, serviceConfig.Name)
+	var downstreamClient *client.Client
 
-	downstreamClient, err := gw.getOrCreateClient(ctx, userID, serviceConfig)
-	if err != nil {
-		log.Printf("Gateway: ERROR - Failed to create client for %q: %v", fqn, err)
-		return mcp.NewToolResultError(err.Error()), nil
+	switch serviceName {
+	case "atlassian", "linear":
+		var err error
+		downstreamClient, err = gw.getRemoteClient(ctx, userID, serviceConfig)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to create remote client: %v", err)), nil
+		}
+	case "github":
+		var err error
+		downstreamClient, err = gw.getDirectClient(ctx, userID, serviceConfig)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to create direct client: %v", err)), nil
+		}
+	default:
+		return mcp.NewToolResultError(fmt.Sprintf("unsupported service: %s", serviceName)), nil
 	}
+	defer downstreamClient.Close()
 
 	downstreamReq := mcp.CallToolRequest{
 		Params: mcp.CallToolParams{
@@ -493,7 +610,36 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 		},
 	}
 
+	log.Printf("Gateway: Forwarding request for tool %q to downstream service %s...", originalToolName, serviceName)
 	return downstreamClient.CallTool(ctx, downstreamReq)
+}
+
+func (gw *GatewayServer) getDirectClient(ctx context.Context, userID string, service config.ServiceConfig) (*client.Client, error) {
+	token, err := gw.getGitHubPat(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	headers := map[string]string{"Authorization": "Bearer " + token}
+
+	c, err := client.NewStreamableHttpClient(service.URL, transport.WithHTTPHeaders(headers))
+	if err != nil {
+		return nil, err
+	}
+
+	if err := c.Start(ctx); err != nil {
+		c.Close()
+		return nil, err
+	}
+
+	if _, err := c.Initialize(ctx, mcp.InitializeRequest{
+		Params: mcp.InitializeParams{
+			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
+		},
+	}); err != nil {
+		c.Close()
+		return nil, err
+	}
+	return c, nil
 }
 
 // needsStart is a helper to check if the client transport needs to be explicitly started.
