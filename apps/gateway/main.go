@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -20,7 +19,6 @@ import (
 	rk_mcp "github.com/arnavsurve/routekit/pkg/mcp"
 	"github.com/arnavsurve/routekit/pkg/registry"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/mark3labs/mcp-go/client"
@@ -125,97 +123,6 @@ func (gw *GatewayServer) mcpAuthMiddleware(next server.ToolHandlerFunc) server.T
 	}
 }
 
-func (gw *GatewayServer) getRemoteClient(ctx context.Context, userID string, service config.ServiceConfig) (*client.Client, error) {
-	if service.Transport != "stdio" {
-		return nil, fmt.Errorf("getRemoteClient only supports stdio transport, but got %s for %s", service.Transport, service.Name)
-	}
-	if len(service.Command) == 0 {
-		return nil, fmt.Errorf("command is required for stdio transport for service %s", service.Name)
-	}
-
-	configDir := fmt.Sprintf("/tmp/routekit_auth/user_%s_service_%s", userID, service.Name)
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create auth config dir: %w", err)
-	}
-
-	env := []string{"MCP_REMOTE_CONFIG_DIR=" + configDir}
-
-	command := service.Command[0]
-	args := service.Command[1:]
-	c, err := client.NewStdioMCPClient(command, env, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	authURLChan := make(chan string)
-	errChan := make(chan error, 1)
-	stderr, ok := client.GetStderr(c)
-	if !ok {
-		c.Close()
-		return nil, fmt.Errorf("failed to get stderr from stdio client for %s", service.Name)
-	}
-
-	go func() {
-		scanner := bufio.NewScanner(stderr)
-		re := regexp.MustCompile(`Please authorize this client by visiting: (https?://\S+)`)
-		for scanner.Scan() {
-			line := scanner.Text()
-			log.Printf("Gatewat: [mcp-remote stderr] %s", line)
-			matches := re.FindStringSubmatch(line)
-			if len(matches) > 1 {
-				authURLChan <- matches[1]
-				return
-			}
-		}
-
-		if err := scanner.Err(); err != nil {
-			errChan <- fmt.Errorf("failed to scan stderr from stdio client for %s: %w", service.Name, err)
-		}
-	}()
-
-	initCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	var initErr error
-	initDone := make(chan struct{})
-	go func() {
-		_, initErr = c.Initialize(initCtx, mcp.InitializeRequest{
-			Params: mcp.InitializeParams{
-				ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
-			},
-		})
-		close(initDone)
-	}()
-
-	select {
-	case authURL := <-authURLChan:
-		log.Printf("Gateway: Intercepted auth URL for %s: %s", service.Name, authURL)
-		c.Close()
-		jsonResponse := fmt.Sprintf(
-			`{"action_required": "user_authentication", "service_name": "%s", "authorization_url": "%s"}`,
-			service.Name,
-			authURL,
-		)
-		return nil, errors.New(jsonResponse)
-
-	case <-initDone:
-		if initErr != nil {
-			c.Close()
-			return nil, fmt.Errorf("failed to initialize stdio client for %s: %w", service.Name, initErr)
-		}
-		log.Printf("Gateway: Successfully initialized client for %s without needing new auth.", service.Name)
-		return c, nil
-
-	case err := <-errChan:
-		c.Close()
-		return nil, err
-
-	case <-initCtx.Done():
-		c.Close()
-		return nil, fmt.Errorf("timeout waiting for stdio client initialization for %s", service.Name)
-	}
-}
-
 func (gw *GatewayServer) getOrCreateClient(ctx context.Context, userID string, service config.ServiceConfig) (*client.Client, error) {
 	cacheKey := userID + ":" + service.Name
 
@@ -227,11 +134,12 @@ func (gw *GatewayServer) getOrCreateClient(ctx context.Context, userID string, s
 			log.Printf("Gateway: Reusing cached client for %s", cacheKey)
 			return clientInstance, nil
 		}
-		// Client is stale, remove from cache
 		log.Printf("Gateway: Cached client for %s failed ping, creating new one.", cacheKey)
 		gw.clientCache.Delete(cacheKey)
 		clientInstance.Close()
 	}
+
+	log.Printf("Gateway: No cached client for %s, creating new connection...", cacheKey)
 
 	newClient, err := gw.createClientForService(ctx, userID, service)
 	if err != nil {
@@ -247,6 +155,23 @@ func (gw *GatewayServer) getOrCreateClient(ctx context.Context, userID string, s
 			log.Printf("Gateway: Client connection for %s closed. Removing from cache.", cacheKey)
 			gw.clientCache.Delete(cacheKey)
 		}()
+	} else if transportWithCancel, ok := newClient.GetTransport().(transportWithCancel); ok {
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				<-ticker.C
+				pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				err := newClient.Ping(pingCtx)
+				pingCancel()
+				if err != nil {
+					log.Printf("Gateway: Client for %s failed health check. Closing and removing from cache.", cacheKey)
+					transportWithCancel.Cancel()
+					gw.clientCache.Delete(cacheKey)
+					return
+				}
+			}
+		}()
 	} else {
 		log.Printf("Gateway: Warning - transport for %s does not expose context for automatic cleanup.", service.Name)
 	}
@@ -260,8 +185,97 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 	var c *client.Client
 	var err error
 
-	if service.Transport == "sse" || service.Transport == "streamable-http" {
+	switch service.Transport {
+	case "stdio":
+		if len(service.Command) == 0 {
+			return nil, fmt.Errorf("command is required for stdio transport for service %s", service.Name)
+		}
 
+		configDir := fmt.Sprintf("/tmp/routekit_auth/user_%s_service_%s", userID, service.Name)
+		if err := os.MkdirAll(configDir, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create auth config dir: %w", err)
+		}
+
+		env := []string{"MCP_REMOTE_CONFIG_DIR=" + configDir}
+
+		command := service.Command[0]
+		args := service.Command[1:]
+
+		c, err = client.NewStdioMCPClient(command, env, args...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create stdio client for %s: %w", service.Name, err)
+
+		}
+
+		authURLChan := make(chan string)
+		errChan := make(chan error, 1)
+		stderr, ok := client.GetStderr(c)
+		if !ok {
+			c.Close()
+			return nil, fmt.Errorf("failed to get stderr from stdio client for %s", service.Name)
+		}
+
+		go func() {
+			scanner := bufio.NewScanner(stderr)
+			re := regexp.MustCompile(`Please authorize this client by visiting: (https?://\S+)`)
+			for scanner.Scan() {
+				line := scanner.Text()
+				log.Printf("Gateway: [mcp-remote stderr] %s", line)
+				matches := re.FindStringSubmatch(line)
+				if len(matches) > 1 {
+					authURLChan <- matches[1]
+					return
+				}
+			}
+
+			if err := scanner.Err(); err != nil {
+				errChan <- fmt.Errorf("failed to scan stderr from stdio client for %s: %w", service.Name, err)
+			}
+		}()
+
+		initCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		var initErr error
+		initDone := make(chan struct{})
+		go func() {
+			_, initErr = c.Initialize(initCtx, mcp.InitializeRequest{
+				Params: mcp.InitializeParams{
+					ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
+				},
+			})
+			close(initDone)
+		}()
+
+		select {
+		case authURL := <-authURLChan:
+			log.Printf("Gateway: Intercepted auth URL for %s: %s", service.Name, authURL)
+			c.Close()
+			jsonResponse := fmt.Sprintf(
+				`{"action_required": "user_authentication", "service_name": "%s", "authorization_url": "%s"}`,
+				service.Name,
+				authURL,
+			)
+			return nil, errors.New(jsonResponse)
+
+		case <-initDone:
+			if initErr != nil {
+				c.Close()
+				return nil, fmt.Errorf("failed to initialize stdio client for %s: %w", service.Name, initErr)
+			}
+			log.Printf("Gateway: Successfully initialized stdio client for %s without needing new auth.", service.Name)
+			return c, nil
+
+		case err := <-errChan:
+			c.Close()
+			return nil, err
+
+		case <-initCtx.Done():
+			c.Close()
+			return nil, fmt.Errorf("timeout waiting for stdio client initialization for %s", service.Name)
+		}
+
+	case "sse", "streamable-http":
 		tokenStore := rk_mcp.NewGatewayTokenStore(gw.db, userID, service.Name)
 
 		oauthConfig := transport.OAuthConfig{
@@ -278,10 +292,7 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 
 		if service.Transport == "sse" {
 			c, err = client.NewOAuthSSEClient(service.URL, oauthConfig)
-		} else { // streamable-http
-			// Note: The GitHub MCP server is different; it just uses a static Bearer token (PAT).
-			// If we were connecting to a true streamable-http OAuth server, we would use NewOAuthStreamableHttpClient.
-			// For GitHub, we'll create a simpler client.
+		} else {
 			if service.Name == "github" {
 				token, err_gh := gw.getGitHubPat(ctx, userID)
 				if err_gh != nil {
@@ -298,93 +309,28 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 			return nil, fmt.Errorf("failed to create client object for %s: %w", service.Name, err)
 		}
 
-		initCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-
 		if needsStart(c) {
-			startErr := c.Start(initCtx)
-
-			if client.IsOAuthAuthorizationRequiredError(startErr) {
-				c.Close()
-				oauthHandler := client.GetOAuthHandler(startErr)
-				if oauthHandler == nil {
-					return nil, fmt.Errorf("authentication required for %s, but OAuth handler is missing", service.Name)
-				}
-
-				state, _ := transport.GenerateState()
-				codeVerifier, _ := transport.GenerateCodeVerifier()
-
-				var existingState, existingCodeVerifier string
-				err := gw.db.QueryRow(context.Background(), "SELECT state, code_verifier FROM oauth_sessions WHERE user_id = $1 AND service_name = $2", userID, service.Name).Scan(&existingState, &existingCodeVerifier)
-
-				switch err {
-				case nil:
-					log.Printf("Gateway: Found existing auth challenge for user %s. Re-using state: %s", userID, existingState)
-					state = existingState
-					codeVerifier = existingCodeVerifier
-				case pgx.ErrNoRows:
-					state, _ = transport.GenerateState()
-					codeVerifier, _ = transport.GenerateCodeVerifier()
-
-					// TODO: migrate this to redis
-					_, dbErr := gw.db.Exec(context.Background(), "INSERT INTO oauth_sessions (state, code_verifier, user_id, service_name) VALUES ($1, $2, $3, $4)", state, codeVerifier, userID, service.Name)
-					if dbErr != nil {
-						return nil, fmt.Errorf("failed to store OAuth session state: %w", dbErr)
-					}
-					log.Printf("Gateway: Saved auth state for user %s. State : %s", userID, state)
-				default:
-					return nil, fmt.Errorf("database error checking for auth session: %w", err)
-				}
-
-				codeChallenge := transport.GenerateCodeChallenge(codeVerifier)
-
-				params := url.Values{}
-				params.Set("response_type", "code")
-				params.Set("client_id", os.Getenv(strings.ToUpper(service.Name)+"_CLIENT_ID"))
-				params.Set("redirect_uri", "http://localhost:3000/api/connectors/"+service.Name+"/callback")
-				params.Set("scope", strings.Join(oauthConfig.Scopes, " "))
-				params.Set("state", state)
-				params.Set("code_challenge", codeChallenge)
-				params.Set("code_challenge_method", "S256")
-				params.Set("audience", "api.atlassian.com")
-				params.Set("prompt", "consent")
-
-				authURL := "https://auth.atlassian.com/authorize?" + params.Encode()
-
-				jsonResponse := fmt.Sprintf(
-					`{"action_required": "user_authentication", "service_name": "%s", "authorization_url": "%s"}`,
-					service.Name,
-					authURL,
-				)
-				return nil, errors.New(jsonResponse)
-			}
-
-			if startErr != nil {
-				c.Close()
+			if startErr := c.Start(ctx); startErr != nil {
 				return nil, fmt.Errorf("failed to start client transport for %s: %w", service.Name, startErr)
 			}
 		}
 
-	} else {
+		initCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		_, initErr := c.Initialize(initCtx, mcp.InitializeRequest{
+			Params: mcp.InitializeParams{ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION},
+		})
+		if initErr != nil {
+			c.Close()
+			return nil, fmt.Errorf("failed to initialize MCP session with %s: %w", service.Name, initErr)
+		}
+
+		return c, nil
+
+	default:
 		return nil, fmt.Errorf("unsupported transport '%q' for service '%s'", service.Transport, service.Name)
 	}
-
-	initCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	_, initErr := c.Initialize(initCtx, mcp.InitializeRequest{
-		Params: struct {
-			ProtocolVersion string                 `json:"protocolVersion"`
-			Capabilities    mcp.ClientCapabilities `json:"capabilities"`
-			ClientInfo      mcp.Implementation     `json:"clientInfo"`
-		}{ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION},
-	})
-	if initErr != nil {
-		c.Close()
-		return nil, fmt.Errorf("failed to initialize MCP session with %s: %w", service.Name, initErr)
-	}
-
-	return c, nil
 }
 
 func (gw *GatewayServer) getGitHubPat(ctx context.Context, userID string) (string, error) {
@@ -444,10 +390,30 @@ func (gw *GatewayServer) handleSearchTools(ctx context.Context, req mcp.CallTool
 		return mcp.NewToolResultError("`services_to_search` must be a list of strings."), nil
 	}
 
-	log.Printf("Gateway: User %s searching for tools with query %q in services %q", userID, query, servicesToSearch)
+	log.Printf("Gateway: User %s searching for tools with query %q in services %v", userID, query, servicesToSearch)
 
 	allServiceConfigs := gw.registry.GetServices()
 	var targetServices []config.ServiceConfig
+
+	if len(servicesToSearch) == 1 && servicesToSearch[0] == "*" {
+		log.Printf("Gateway: Wildcard search detected. Searching all configured services.")
+		targetServices = allServiceConfigs
+	} else {
+		for _, serviceName := range servicesToSearch {
+			found := false
+			for _, cfg := range allServiceConfigs {
+				if cfg.Name == serviceName {
+					targetServices = append(targetServices, cfg)
+					found = true
+					break
+				}
+			}
+			if !found {
+				log.Printf("Gateway: WARN - User %s requested search in unknown service %s", userID, serviceName)
+			}
+		}
+	}
+
 	for _, serviceName := range servicesToSearch {
 		found := false
 		for _, cfg := range allServiceConfigs {
@@ -467,6 +433,8 @@ func (gw *GatewayServer) handleSearchTools(ctx context.Context, req mcp.CallTool
 		return mcp.NewToolResultError(discoverErr.Error()), nil
 	}
 
+	log.Printf("Gateway: Discovered %d total tools from services before search.", len(discoveredTools))
+
 	var foundTools []mcp.Tool
 
 	if query == "" || query == "*" {
@@ -481,8 +449,12 @@ func (gw *GatewayServer) handleSearchTools(ctx context.Context, req mcp.CallTool
 	}
 
 	if len(foundTools) == 0 {
-		log.Printf("Gateway: No tools found for user %s with query %q in services %q", userID, query, servicesToSearch)
-		return mcp.NewToolResultText(`{"tools":[]}`), nil
+		log.Printf("Gateway: Semantic search found 0 tools for query %q.", query)
+	} else {
+		log.Printf("Gateway: Semantic search found %d tools for query %q:", len(foundTools), query)
+		for i, tool := range foundTools {
+			log.Printf("  - Result %d: %s", i+1, tool.Name)
+		}
 	}
 
 	searchResult := SearchResult{Tools: foundTools}
@@ -504,19 +476,7 @@ func (gw *GatewayServer) discoverUserTools(ctx context.Context, userID string, s
 		go func(s config.ServiceConfig) {
 			defer wg.Done()
 
-			var c *client.Client
-			var err error
-
-			switch s.Name {
-			case "atlassian", "linear":
-				c, err = gw.getRemoteClient(ctx, userID, s)
-			case "github":
-				c, err = gw.getDirectClient(ctx, userID, s)
-			default:
-				log.Printf("Skipping discover for unconfigured service: %s", s.Name)
-				return
-			}
-
+			c, err := gw.getOrCreateClient(ctx, userID, s)
 			if err != nil {
 				if strings.Contains(err.Error(), "action_required") {
 					errChan <- err
@@ -525,11 +485,12 @@ func (gw *GatewayServer) discoverUserTools(ctx context.Context, userID string, s
 				log.Printf("Gateway: Failed to create client for %s during discovery: %v", s.Name, err)
 				return
 			}
-			defer c.Close()
 
 			tools, err := c.ListTools(ctx, mcp.ListToolsRequest{})
 			if err != nil {
 				log.Printf("Gateway: Failed to list tools from %s for user %s: %v", s.Name, userID, err)
+				gw.clientCache.Delete(userID + ":" + s.Name)
+				c.Close()
 				return
 			}
 
@@ -564,44 +525,29 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 		return mcp.NewToolResultError("Internal error; user ID not found in context"), nil
 	}
 
-	fqn := req.GetString("tool_name", "")
+	// This is the unprefixed tool name
+	toolName := req.GetString("tool_name", "")
 	args, ok := req.GetArguments()["tool_args"].(map[string]any)
 	if !ok {
 		return mcp.NewToolResultError("tool_args must be an object"), nil
 	}
 
-	nameParts := strings.SplitN(fqn, "__", 2)
-	if len(nameParts) != 2 {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid tool name format: %s", fqn)), nil
-	}
-	serviceName := nameParts[0]
-	originalToolName := nameParts[1]
-
-	serviceConfig, found := gw.registry.GetServiceConfig(serviceName)
+	serviceConfig, fqn, found := gw.registry.FindServiceByToolName(ctx, toolName)
 	if !found {
-		log.Printf("Gateway: Service %q for tool %q not found in service catalog (routekit.yml)", serviceName, fqn)
-		return mcp.NewToolResultErrorf("Unknown service in tool name: %s", serviceName), nil
+		log.Printf("Gateway: Tool %q not found in any registered service", toolName)
+		return mcp.NewToolResultErrorf("Unknown tool: %s. Please use routekit_search_tools to find available tools.", toolName), nil
 	}
 
-	var downstreamClient *client.Client
+	serviceName := serviceConfig.Name
+	originalToolName := toolName
 
-	switch serviceName {
-	case "atlassian", "linear":
-		var err error
-		downstreamClient, err = gw.getRemoteClient(ctx, userID, serviceConfig)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to create remote client: %v", err)), nil
+	downstreamClient, err := gw.getOrCreateClient(ctx, userID, serviceConfig)
+	if err != nil {
+		if strings.Contains(err.Error(), "action_required") {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
-	case "github":
-		var err error
-		downstreamClient, err = gw.getDirectClient(ctx, userID, serviceConfig)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to create direct client: %v", err)), nil
-		}
-	default:
-		return mcp.NewToolResultError(fmt.Sprintf("unsupported service: %s", serviceName)), nil
+		return mcp.NewToolResultErrorf("failed to create client for %s: %v", serviceName, err), nil
 	}
-	defer downstreamClient.Close()
 
 	downstreamReq := mcp.CallToolRequest{
 		Params: mcp.CallToolParams{
@@ -610,36 +556,8 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 		},
 	}
 
-	log.Printf("Gateway: Forwarding request for tool %q to downstream service %s...", originalToolName, serviceName)
+	log.Printf("Gateway: Forwarding request for tool %q (%s) to downstream service %s...", originalToolName, fqn, serviceName)
 	return downstreamClient.CallTool(ctx, downstreamReq)
-}
-
-func (gw *GatewayServer) getDirectClient(ctx context.Context, userID string, service config.ServiceConfig) (*client.Client, error) {
-	token, err := gw.getGitHubPat(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	headers := map[string]string{"Authorization": "Bearer " + token}
-
-	c, err := client.NewStreamableHttpClient(service.URL, transport.WithHTTPHeaders(headers))
-	if err != nil {
-		return nil, err
-	}
-
-	if err := c.Start(ctx); err != nil {
-		c.Close()
-		return nil, err
-	}
-
-	if _, err := c.Initialize(ctx, mcp.InitializeRequest{
-		Params: mcp.InitializeParams{
-			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
-		},
-	}); err != nil {
-		c.Close()
-		return nil, err
-	}
-	return c, nil
 }
 
 // needsStart is a helper to check if the client transport needs to be explicitly started.

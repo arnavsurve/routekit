@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/arnavsurve/routekit/pkg/config"
@@ -115,16 +116,22 @@ func (r *Registry) SearchCapabilitiesJIT(ctx context.Context, query string, avai
 		return scoredTools[i].Similarity > scoredTools[j].Similarity
 	})
 
-	// TODO: Similarity threshold to filter out irrelevant results.
-	// For now, we can just return top N
+	log.Printf("Registry: Top 5 similarity scores for query %q:", query)
+	for i := 0; i < 5 && i < len(scoredTools); i++ {
+		log.Printf("  - %s: %.4f", scoredTools[i].Tool.Name, scoredTools[i].Similarity)
+	}
 
 	const similarityThreshold = 0.75
 
 	var relevantTools []mcp.Tool
 	for _, st := range scoredTools {
-		if st.Similarity < similarityThreshold {
+		if st.Similarity >= similarityThreshold {
 			relevantTools = append(relevantTools, st.Tool)
 		}
+	}
+
+	if len(relevantTools) == 0 {
+		log.Printf("Registry: No tools met the similarity threshold of %.2f for query %q", similarityThreshold, query)
 	}
 
 	resultCount := 10
@@ -149,6 +156,26 @@ func createEmbedding(ctx context.Context, text string) ([]float32, error) {
 	return resp.Data[0].Embedding, nil
 }
 
+// GetAllCapabilities retrieves all tools from the database with unprefixed names.
+func (r *Registry) GetAllCapabilities(ctx context.Context) ([]mcp.Tool, error) {
+	rows, err := r.db.Query(ctx, "SELECT fqn, description, input_schema FROM capabilities")
+	if err != nil {
+		return nil, fmt.Errorf("database query failed: %w", err)
+	}
+	defer rows.Close()
+
+	var tools []mcp.Tool
+	for rows.Next() {
+		var fqn, description string
+		var inputSchemaBytes []byte
+		if err := rows.Scan(&fqn, &description, &inputSchemaBytes); err != nil {
+			return nil, fmt.Errorf("scanning capabilities: %w", err)
+		}
+		tools = append(tools, toTool(fqn, description, inputSchemaBytes))
+	}
+	return tools, nil
+}
+
 // SearchCapabilities performs a semantic vector search against the capabilities table.
 func (r *Registry) SearchCapabilities(ctx context.Context, query string) ([]mcp.Tool, error) {
 	queryEmbedding, err := createEmbedding(ctx, query)
@@ -167,35 +194,16 @@ func (r *Registry) SearchCapabilities(ctx context.Context, query string) ([]mcp.
 	}
 	defer rows.Close()
 
-	var results []mcp.Tool
+	var tools []mcp.Tool
 	for rows.Next() {
-		var (
-			fqn              string
-			serviceName      string
-			description      string
-			inputSchemaBytes []byte
-		)
-		if err := rows.Scan(&fqn, &serviceName, &description, &inputSchemaBytes); err != nil {
+		var fqn, description string
+		var inputSchemaBytes []byte
+		if err := rows.Scan(&fqn, &description, &inputSchemaBytes); err != nil {
 			return nil, fmt.Errorf("scanning capabilities: %w", err)
 		}
-
-		var inputSchema mcp.ToolInputSchema
-		if len(inputSchemaBytes) > 0 {
-			if err := json.Unmarshal(inputSchemaBytes, &inputSchema); err != nil {
-				log.Printf("Registry: WARN - could not parse inputSchema for tool %q: %v\n", fqn, err)
-			}
-		} else {
-			inputSchema = mcp.ToolInputSchema{Type: "object", Properties: map[string]any{}}
-		}
-
-		results = append(results, mcp.Tool{
-			Name:        fqn,
-			Description: fmt.Sprintf("[%s] %s", serviceName, description),
-			InputSchema: inputSchema,
-		})
+		tools = append(tools, toTool(fqn, description, inputSchemaBytes))
 	}
-
-	return results, nil
+	return tools, nil
 }
 
 func (r *Registry) Resolve(ctx context.Context, fqn string) (config.ServiceConfig, bool) {
@@ -209,4 +217,45 @@ func (r *Registry) Resolve(ctx context.Context, fqn string) (config.ServiceConfi
 	}
 	service, found := r.services[serviceName]
 	return service, found
+}
+
+// FindServiceByToolName looks up which service provides a given tool.
+func (r *Registry) FindServiceByToolName(ctx context.Context, toolName string) (config.ServiceConfig, string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	// TODO: for performance we can cache this. also assumes tool names are unique across the mesh.
+	// Prob need better resolution strategy but I am still pissed at atlassian shitfuck devex so deferring.
+	var fqn, serviceName string
+	err := r.db.QueryRow(ctx, "SELECT fqn, service_name FROM capabilities WHERE tool_name = $1", toolName).Scan(&fqn, &serviceName)
+	if err != nil {
+		return config.ServiceConfig{}, "", false
+	}
+
+	service, found := r.services[serviceName]
+	return service, fqn, found
+}
+
+func toTool(fqn, description string, inputSchemaBytes []byte) mcp.Tool {
+	var inputSchema mcp.ToolInputSchema
+	if err := json.Unmarshal(inputSchemaBytes, &inputSchema); err != nil {
+		log.Printf("Registry: WARN - could not parse schema for tool %q: %v", fqn, err)
+		inputSchema = mcp.ToolInputSchema{
+			Type:       "object",
+			Properties: map[string]any{},
+		}
+	}
+
+	nameParts := strings.SplitN(fqn, "__", 2)
+	toolName := fqn
+	if len(nameParts) == 2 {
+		toolName = nameParts[1]
+	}
+
+	// Important - we return the tool name to the agent without the prefix
+	return mcp.Tool{
+		Name:        toolName,
+		Description: description,
+		InputSchema: inputSchema,
+	}
 }
