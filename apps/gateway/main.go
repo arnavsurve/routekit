@@ -41,11 +41,12 @@ type Claims struct {
 }
 
 type GatewayServer struct {
-	mcpServer   *server.MCPServer
-	registry    *registry.Registry
-	db          *pgxpool.Pool
-	jwtSecret   []byte
-	clientCache *sync.Map
+	mcpServer           *server.MCPServer
+	registry            *registry.Registry
+	db                  *pgxpool.Pool
+	jwtSecret           []byte
+	clientCache         *sync.Map
+	clientCreationLocks *sync.Map
 }
 
 type contextKey string
@@ -58,11 +59,12 @@ func NewGatewayServer(dbPool *pgxpool.Pool, secret []byte) *GatewayServer {
 	)
 
 	gw := &GatewayServer{
-		mcpServer:   s,
-		registry:    registry.New(dbPool),
-		db:          dbPool,
-		jwtSecret:   secret,
-		clientCache: &sync.Map{},
+		mcpServer:           s,
+		registry:            registry.New(dbPool),
+		db:                  dbPool,
+		jwtSecret:           secret,
+		clientCache:         &sync.Map{},
+		clientCreationLocks: &sync.Map{},
 	}
 
 	s.AddTool(
@@ -134,9 +136,22 @@ func (gw *GatewayServer) getOrCreateClient(ctx context.Context, userID string, s
 			log.Printf("Gateway: Reusing cached client for %s", cacheKey)
 			return clientInstance, nil
 		}
-		log.Printf("Gateway: Cached client for %s failed ping, creating new one.", cacheKey)
+
+		log.Printf("Gateway: Cached client for %s failed ping, creaing new one.", cacheKey)
 		gw.clientCache.Delete(cacheKey)
 		clientInstance.Close()
+	}
+
+	lock, _ := gw.clientCreationLocks.LoadOrStore(cacheKey, &sync.Mutex{})
+	creationLock := lock.(*sync.Mutex)
+	creationLock.Lock()
+	defer creationLock.Unlock()
+
+	// Double check cache after acquiring lock in case another goroutine created the client
+	// while we were waiting for the lock.
+	if cachedClient, ok := gw.clientCache.Load(cacheKey); ok {
+		log.Printf("Gateway: Reusing client for %s (created by another goroutine)", cacheKey)
+		return cachedClient.(*client.Client), nil
 	}
 
 	log.Printf("Gateway: No cached client for %s, creating new connection...", cacheKey)
@@ -154,6 +169,7 @@ func (gw *GatewayServer) getOrCreateClient(ctx context.Context, userID string, s
 			<-transportWithCtx.Context().Done()
 			log.Printf("Gateway: Client connection for %s closed. Removing from cache.", cacheKey)
 			gw.clientCache.Delete(cacheKey)
+			gw.clientCreationLocks.Delete(cacheKey)
 		}()
 	} else if transportWithCancel, ok := newClient.GetTransport().(transportWithCancel); ok {
 		go func() {
@@ -168,6 +184,7 @@ func (gw *GatewayServer) getOrCreateClient(ctx context.Context, userID string, s
 					log.Printf("Gateway: Client for %s failed health check. Closing and removing from cache.", cacheKey)
 					transportWithCancel.Cancel()
 					gw.clientCache.Delete(cacheKey)
+					gw.clientCreationLocks.Delete(cacheKey)
 					return
 				}
 			}
