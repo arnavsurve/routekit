@@ -525,21 +525,25 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 		return mcp.NewToolResultError("Internal error; user ID not found in context"), nil
 	}
 
-	// This is the unprefixed tool name
-	toolName := req.GetString("tool_name", "")
+	// This is the fully qualified tool name
+	fqn := req.GetString("tool_name", "")
 	args, ok := req.GetArguments()["tool_args"].(map[string]any)
 	if !ok {
 		return mcp.NewToolResultError("tool_args must be an object"), nil
 	}
 
-	serviceConfig, fqn, found := gw.registry.FindServiceByToolName(ctx, toolName)
-	if !found {
-		log.Printf("Gateway: Tool %q not found in any registered service", toolName)
-		return mcp.NewToolResultErrorf("Unknown tool: %s. Please use routekit_search_tools to find available tools.", toolName), nil
+	nameParts := strings.SplitN(fqn, "__", 2)
+	if len(nameParts) != 2 {
+		return mcp.NewToolResultErrorf("invalid tool name format: %s. Expected 'service__tool'", fqn), nil
 	}
+	serviceName := nameParts[0]
+	originalToolName := nameParts[1]
 
-	serviceName := serviceConfig.Name
-	originalToolName := toolName
+	serviceConfig, found := gw.registry.GetServiceConfig(serviceName)
+	if !found {
+		log.Printf("Gateway: Service %q for tool %q not found in service catalog (routekit.yml)", serviceName, fqn)
+		return mcp.NewToolResultErrorf("Unknown service in tool name: %s", serviceName), nil
+	}
 
 	downstreamClient, err := gw.getOrCreateClient(ctx, userID, serviceConfig)
 	if err != nil {
