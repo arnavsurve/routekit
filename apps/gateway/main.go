@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"regexp"
@@ -423,32 +424,16 @@ func (gw *GatewayServer) handleSearchTools(ctx context.Context, req mcp.CallTool
 		log.Printf("Gateway: Wildcard search detected. Searching all configured services.")
 		targetServices = allServiceConfigs
 	} else {
+		serviceConfigMap := make(map[string]config.ServiceConfig)
+		for _, cfg := range allServiceConfigs {
+			serviceConfigMap[cfg.Name] = cfg
+		}
 		for _, serviceName := range servicesToSearch {
-			found := false
-			for _, cfg := range allServiceConfigs {
-				if cfg.Name == serviceName {
-					targetServices = append(targetServices, cfg)
-					found = true
-					break
-				}
-			}
-			if !found {
+			if cfg, ok := serviceConfigMap[serviceName]; ok {
+				targetServices = append(targetServices, cfg)
+			} else {
 				log.Printf("Gateway: WARN - User %s requested search in unknown service %s", userID, serviceName)
 			}
-		}
-	}
-
-	for _, serviceName := range servicesToSearch {
-		found := false
-		for _, cfg := range allServiceConfigs {
-			if cfg.Name == serviceName {
-				targetServices = append(targetServices, cfg)
-				found = true
-				break
-			}
-		}
-		if !found {
-			log.Printf("Gateway: WARN - User %s requested search in unknown service %s", userID, serviceName)
 		}
 	}
 
@@ -495,10 +480,18 @@ func (gw *GatewayServer) discoverUserTools(ctx context.Context, userID string, s
 	toolChan := make(chan mcp.Tool, 100)
 	errChan := make(chan error, len(services))
 
+	discoverCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	for _, service := range services {
 		wg.Add(1)
 		go func(s config.ServiceConfig) {
 			defer wg.Done()
+			select {
+			case <-discoverCtx.Done():
+				return
+			default:
+			}
 
 			c, err := gw.getOrCreateClient(ctx, userID, s)
 			if err != nil {
@@ -514,32 +507,60 @@ func (gw *GatewayServer) discoverUserTools(ctx context.Context, userID string, s
 			if err != nil {
 				log.Printf("Gateway: Failed to list tools from %s for user %s: %v", s.Name, userID, err)
 				gw.clientCache.Delete(userID + ":" + s.Name)
-				c.Close()
+				if closer, ok := c.GetTransport().(io.Closer); ok {
+					closer.Close()
+				}
 				return
 			}
 
 			for _, tool := range tools.Tools {
 				tool.Name = fmt.Sprintf("%s__%s", s.Name, tool.Name)
-				toolChan <- tool
+				select {
+				case toolChan <- tool:
+				case <-discoverCtx.Done():
+					return
+				}
 			}
 		}(service)
 	}
 
-	wg.Wait()
-	close(toolChan)
-	close(errChan)
+	go func() {
+		wg.Wait()
+		close(toolChan)
+		close(errChan)
+	}()
 
-	for err := range errChan {
-		if err != nil {
-			return nil, err
+	var allTools []mcp.Tool
+	var firstErr error
+
+	for {
+		select {
+		case tool, ok := <-toolChan:
+			if !ok {
+				toolChan = nil
+			} else {
+				allTools = append(allTools, tool)
+			}
+		case err, ok := <-errChan:
+			if !ok {
+				errChan = nil
+			} else if err != nil && firstErr == nil {
+				firstErr = err
+			}
+		case <-discoverCtx.Done():
+			log.Printf("Gateway: Tool discovery timed out.")
+			if firstErr != nil {
+				return nil, firstErr
+			}
+			return allTools, discoverCtx.Err()
+		}
+
+		if toolChan == nil && errChan == nil {
+			break
 		}
 	}
 
-	var allTools []mcp.Tool
-	for tool := range toolChan {
-		allTools = append(allTools, tool)
-	}
-	return allTools, nil
+	return allTools, firstErr
 }
 
 // handleExecute routes a tool call to the correct downstream service.
