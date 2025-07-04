@@ -83,5 +83,18 @@ CREATE TABLE IF NOT EXISTS oauth_sessions (
 	}
 	log.Println("OAuth sessions table is ready.")
 
+	_, err = conn.Exec(context.Background(), `
+CREATE TABLE IF NOT EXISTS user_service_configs (
+	user_id UUID PRIMARY KEY,
+	config_yaml TEXT NOT NULL,
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+	`)
+	if err != nil {
+		log.Fatalf("Failed to create user_service_configs table: %v\n", err)
+	}
+	log.Println("User service configs table is ready.")
+
 	log.Println("Migration completed successfully.")
 }

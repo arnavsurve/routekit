@@ -7,6 +7,7 @@ import (
 	"github.com/arnavsurve/routekit/apps/web/backend/agent"
 	"github.com/arnavsurve/routekit/apps/web/backend/auth"
 	"github.com/arnavsurve/routekit/apps/web/backend/connectors"
+	"github.com/arnavsurve/routekit/apps/web/backend/services"
 	"github.com/arnavsurve/routekit/pkg/crypto"
 	"github.com/arnavsurve/routekit/pkg/db"
 	"github.com/joho/godotenv"
@@ -85,6 +86,16 @@ func main() {
 
 	// Connectors status
 	api.GET("/connectors/status", connectorManager.HandleGetAllStatuses)
+
+	// User service configuration
+	servicesHandler := &services.ServicesHandler{
+		DBPool: db.GetPool(),
+	}
+	api.GET("/user/services", servicesHandler.HandleGetUserServices)
+	api.POST("/user/services", servicesHandler.HandleUpdateUserServices)
+
+	api.GET("/services", servicesHandler.HandleGetUserServices)
+	api.PUT("/services", servicesHandler.HandleUpdateUserServices)
 
 	// WebSocket route
 	e.GET("/ws", agent.HandleWebSocket, authHandler.AuthMiddleware)

@@ -4,426 +4,87 @@
     <meta charset="UTF-8">
     <title>Routekit - Settings</title>
     <style>
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            color: #333;
-            background-color: #f9fafb;
-        }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 20px 0;
-            border-bottom: 1px solid #eaeaea;
-            margin-bottom: 30px;
-        }
-        .header h1 {
-            margin: 0;
-            font-size: 24px;
-        }
-        .nav {
-            background-color: #f8f9fa;
-            padding: 15px 0;
-            border-bottom: 1px solid #eaeaea;
-        }
-        .nav ul {
-            list-style: none;
-            padding: 0;
-            margin: 0;
-            display: flex;
-        }
-        .nav li {
-            margin-right: 20px;
-        }
-        .nav a {
-            text-decoration: none;
-            color: #333;
-            font-weight: 500;
-            padding: 5px 0;
-        }
-        .nav a:hover {
-            color: #007bff;
-        }
-        .nav a.active {
-            color: #007bff;
-            border-bottom: 2px solid #007bff;
-        }
-        .sidebar {
-            width: 250px;
-            padding-right: 30px;
-            flex-shrink: 0;
-        }
-        .sidebar ul {
-            list-style: none;
-            padding: 0;
-        }
-        .sidebar li {
-            margin-bottom: 10px;
-        }
-        .sidebar a {
-            display: block;
-            padding: 10px;
-            text-decoration: none;
-            color: #333;
-            border-radius: 5px;
-        }
-        .sidebar a:hover {
-            background-color: #f0f2f5;
-        }
-        .sidebar a.active {
-            background-color: #e9ecef;
-            font-weight: 500;
-        }
-        .content {
-            display: flex;
-        }
-        .main-content {
-            flex: 1;
-        }
-        .card {
-            border: 1px solid #eaeaea;
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 20px;
-            background-color: white;
-        }
-        .card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-        }
-        .card-header h2 {
-            margin: 0;
-            font-size: 18px;
-        }
-        .btn {
-            display: inline-block;
-            background-color: #007bff;
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-            text-decoration: none;
-            text-align: center;
-        }
-        .btn:hover {
-            background-color: #0069d9;
-        }
-        .btn-danger {
-            background-color: #dc3545;
-        }
-        .btn-danger:hover {
-            background-color: #c82333;
-        }
-        .form-group {
-            margin-bottom: 15px;
-        }
-        .form-group label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: 500;
-        }
-        .form-control {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid #ced4da;
-            border-radius: 4px;
-            box-sizing: border-box;
-        }
-        .form-control:focus {
-            border-color: #80bdff;
-            outline: 0;
-            box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
-        }
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.5);
-        }
-        .modal-content {
-            background-color: white;
-            margin: 10% auto;
-            padding: 20px;
-            border-radius: 8px;
-            width: 500px;
-            max-width: 90%;
-        }
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-        }
-        .modal-header h3 {
-            margin: 0;
-        }
-        .close {
-            font-size: 24px;
-            font-weight: bold;
-            cursor: pointer;
-        }
-        .close:hover {
-            color: #007bff;
-        }
-        .status-indicator {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            margin-right: 8px;
-            display: inline-block;
-        }
-        .status-connected {
-            background-color: #28a745;
-        }
-        .status-disconnected {
-            background-color: #dc3545;
-        }
-        .connector-info {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 15px 0;
-            border-bottom: 1px solid #eaeaea;
-        }
-        .connector-info:last-child {
-            border-bottom: none;
-        }
-        .hidden {
-            display: none;
-        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto; background-color: #f4f7f6; display: flex; flex-direction: column; height: 100vh; margin: 0; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .nav { background-color: #f8f9fa; padding: 15px 0; border-bottom: 1px solid #eaeaea; }
+        .nav ul { list-style: none; padding: 0; margin: 0; display: flex; }
+        .nav li { margin-left: 20px; }
+        .nav a { text-decoration: none; color: #333; font-weight: 500; }
+        .nav a.active { color: #007bff; border-bottom: 2px solid #007bff; }
+        h1 { margin-bottom: 20px; }
+        textarea { width: 100%; height: 50vh; font-family: monospace; font-size: 14px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; resize: vertical; }
+        button { background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 16px; margin-top: 10px; }
+        button:hover { background-color: #0056b3; }
+        .message { margin-top: 10px; padding: 10px; border-radius: 4px; }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
     </style>
 </head>
 <body>
     <div class="nav">
         <div class="container">
             <ul>
-                <li><a href="/">Home</a></li>
+                <li><a href="/">Chat</a></li>
                 <li><a href="/settings.html" class="active">Settings</a></li>
             </ul>
         </div>
     </div>
-
     <div class="container">
-        <div class="header">
-            <h1>Settings</h1>
-        </div>
-
-        <div class="content">
-            <div class="sidebar">
-                <ul>
-                    <li><a href="#" class="active" data-section="connectors">Connectors</a></li>
-                    <li><a href="#" data-section="profile">Profile</a></li>
-                    <li><a href="#" data-section="preferences">Preferences</a></li>
-                </ul>
-            </div>
-
-            <div class="main-content">
-                <!-- Connectors Section -->
-                <div id="connectors-section" class="settings-section">
-                    <div class="card">
-                        <div class="card-header">
-                            <h2>Connected Services</h2>
-                        </div>
-                        <div id="connectors-list">
-                            <!-- Connector statuses will be dynamically inserted here -->
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Other sections (hidden by default) -->
-                <div id="profile-section" class="settings-section hidden">
-                    <div class="card">
-                        <h2>Profile Settings</h2>
-                        <p>Profile settings will be available soon.</p>
-                    </div>
-                </div>
-
-                <div id="preferences-section" class="settings-section hidden">
-                    <div class="card">
-                        <h2>Preferences</h2>
-                        <p>Preference settings will be available soon.</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- GitHub Connection Modal -->
-    <div id="github-modal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>Connect GitHub</h3>
-                <span class="close" data-modal-id="github-modal">×</span>
-            </div>
-            <form id="github-form">
-                <div class="form-group">
-                    <label for="github-pat">GitHub Personal Access Token (PAT)</label>
-                    <input type="password" id="github-pat" class="form-control" placeholder="ghp_..." required>
-                    <small>Enter your GitHub Personal Access Token. You can create one in your <a href="https://github.com/settings/personal-access-tokens" target="_blank">GitHub Settings</a>.</small>
-                </div>
-                <div class="form-group">
-                    <button type="submit" class="btn">Connect</button>
-                </div>
-            </form>
-        </div>
+        <h1>Service Configuration</h1>
+        <p>Define the MCP services you want Routekit to connect to using YAML. This configuration will be the source of truth for your agent.</p>
+        <form id="config-form">
+            <textarea id="config-yaml" placeholder="version: 1\nservices:\n  - name: my-service\n    transport: ..."></textarea>
+            <button type="submit">Save Configuration</button>
+        </form>
+        <div id="message-area" class="message" style="display: none;"></div>
     </div>
 
     <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            const connectorsList = document.getElementById('connectors-list');
+        document.addEventListener('DOMContentLoaded', async () => {
+            const configTextarea = document.getElementById('config-yaml');
+            const configForm = document.getElementById('config-form');
+            const messageArea = document.getElementById('message-area');
 
-            // --- Configuration for each connector ---
-            const connectorConfig = {
-                'github': {
-                    displayName: 'GitHub',
-                    connect: () => {
-                        document.getElementById('github-modal').style.display = 'block';
-                    },
-                },
-                'atlassian': {
-                    displayName: 'Atlassian (Jira/Confluence)',
-                    connect: () => {
-                        // Redirect to the backend which handles the full OAuth flow
-                        window.location.href = '/api/connectors/atlassian/connect';
-                    },
-                },
-                'linear': {
-                    displayName: 'Linear',
-                    connect: async () => {
-                        const response = await fetch('/api/connectors/linear', { method: 'POST' });
-                        if (response.ok) fetchAndRenderStatuses();
-                        else alert('Failed to connect Linear.');
-                     },
+            // Fetch and display current config
+            try {
+                const response = await fetch('/api/user/services');
+                if (response.ok) {
+                    const data = await response.json();
+                    configTextarea.value = data.config_yaml;
+                } else {
+                    showMessage('Could not load your configuration.', 'error');
                 }
-            };
-
-            // --- Main function to fetch statuses and render the UI ---
-            async function fetchAndRenderStatuses() {
-                try {
-                    const response = await fetch('/api/connectors/status');
-                    if (!response.ok) throw new Error('Failed to fetch connector statuses');
-                    const statuses = await response.json();
-                    
-                    connectorsList.innerHTML = ''; // Clear existing list to prevent duplicates
-
-                    for (const serviceName in connectorConfig) {
-                        const config = connectorConfig[serviceName];
-                        // Get the status for the current service, defaulting to not connected
-                        const status = statuses[serviceName] || { connected: false };
-                        renderConnector(serviceName, config.displayName, status.connected);
-                    }
-                } catch (error) {
-                    console.error('Error fetching connector statuses:', error);
-                    connectorsList.innerHTML = '<p>Could not load connector statuses. Please try again later.</p>';
-                }
+            } catch (error) {
+                showMessage('Error loading configuration: ' + error.message, 'error');
             }
 
-            // --- Renders a single connector's status and actions ---
-            function renderConnector(serviceName, displayName, isConnected) {
-                const isConnectedClass = isConnected ? 'status-connected' : 'status-disconnected';
-                const isConnectedText = isConnected ? 'Connected' : 'Disconnected';
-                const buttonClass = isConnected ? 'btn-danger' : 'btn';
-                const buttonText = isConnected ? 'Disconnect' : 'Connect';
-
-                const connectorHtml = `
-                    <div class="connector-info" data-service="${serviceName}">
-                        <div>
-                            <h3>${displayName}</h3>
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                <div class="status-indicator ${isConnectedClass}"></div>
-                                <span>${isConnectedText}</span>
-                            </div>
-                        </div>
-                        <div class="connector-actions">
-                            <button class="btn ${buttonClass}" data-action="${isConnected ? 'disconnect' : 'connect'}">${buttonText}</button>
-                        </div>
-                    </div>
-                `;
-                connectorsList.insertAdjacentHTML('beforeend', connectorHtml);
-            }
-
-            // --- Event delegation for all connector buttons ---
-            connectorsList.addEventListener('click', (e) => {
-                if (e.target.tagName !== 'BUTTON') return;
-
-                const action = e.target.dataset.action;
-                const serviceName = e.target.closest('.connector-info').dataset.service;
-                
-                if (action === 'connect') {
-                    connectorConfig[serviceName].connect();
-                } else if (action === 'disconnect') {
-                    disconnectService(serviceName);
-                }
-            });
-
-            // --- Generic function to disconnect a service ---
-            async function disconnectService(serviceName) {
-                const displayName = connectorConfig[serviceName].displayName;
-                if (!confirm(`Are you sure you want to disconnect your ${displayName} account?`)) return;
-
-                try {
-                    const response = await fetch(`/api/connectors/${serviceName}`, { method: 'DELETE' });
-                    if (!response.ok) throw new Error(`Failed to disconnect ${displayName}`);
-                    await fetchAndRenderStatuses(); // Refresh the entire UI
-                } catch (error) {
-                    alert(`Error: ${error.message}`);
-                }
-            }
-
-            // --- GitHub-specific PAT form handling ---
-            document.getElementById('github-form').addEventListener('submit', async (e) => {
+            // Handle form submission
+            configForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
-                const githubPatInput = document.getElementById('github-pat');
-                if (!githubPatInput.value) {
-                    alert('Please enter your GitHub Personal Access Token');
-                    return;
-                }
-                
+                const configYAML = configTextarea.value;
+
                 try {
-                    const response = await fetch('/api/connectors/github', {
+                    const response = await fetch('/api/user/services', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ token: githubPatInput.value })
+                        body: JSON.stringify({ config_yaml: configYAML })
                     });
-                    if (!response.ok) throw new Error('Failed to connect GitHub. Please check your token and try again.');
-                    
-                    document.getElementById('github-modal').style.display = 'none';
-                    githubPatInput.value = ''; // Clear the input after submission
-                    await fetchAndRenderStatuses();
+                    const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(data.error || 'Failed to save configuration.');
+                    }
+                    showMessage('Configuration saved successfully!', 'success');
                 } catch (error) {
-                    alert(`Error: ${error.message}`);
-                }
-            });
-            
-            // --- General modal closing logic ---
-            document.querySelectorAll('.modal .close').forEach(closeBtn => {
-                closeBtn.addEventListener('click', () => {
-                    document.getElementById(closeBtn.dataset.modalId).style.display = 'none';
-                });
-            });
-            window.addEventListener('click', (e) => {
-                if (e.target.classList.contains('modal')) {
-                    e.target.style.display = 'none';
+                    showMessage('Error saving configuration: ' + error.message, 'error');
                 }
             });
 
-            // --- Initial page load ---
-            fetchAndRenderStatuses();
+            function showMessage(text, type) {
+                messageArea.textContent = text;
+                messageArea.className = `message ${type}`;
+                messageArea.style.display = 'block';
+                setTimeout(() => { messageArea.style.display = 'none'; }, 5000);
+            }
         });
     </script>
 </body>

@@ -26,6 +26,7 @@ import (
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"gopkg.in/yaml.v2"
 )
 
 type transportWithContext interface {
@@ -124,6 +125,26 @@ func (gw *GatewayServer) mcpAuthMiddleware(next server.ToolHandlerFunc) server.T
 		ctxWithUser := context.WithValue(ctx, userIDKey, claims.UserID)
 		return next(ctxWithUser, req)
 	}
+}
+
+func (gw *GatewayServer) getUserServiceConfigs(ctx context.Context, userID string) ([]config.ServiceConfig, error) {
+	var configYAML string
+	err := gw.db.QueryRow(ctx, "SELECT config_yaml FROM user_service_configs WHERE user_id = $1", userID).Scan(&configYAML)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return []config.ServiceConfig{}, nil
+		}
+		return nil, fmt.Errorf("failed to get user service config: %w", err)
+	}
+
+	var serviceFile struct {
+		Services []config.ServiceConfig `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(configYAML), &serviceFile); err != nil {
+		return nil, fmt.Errorf("failed to parse user service config YAML: %w", err)
+	}
+
+	return serviceFile.Services, nil
 }
 
 func (gw *GatewayServer) getOrCreateClient(ctx context.Context, userID string, service config.ServiceConfig) (*client.Client, error) {
@@ -374,20 +395,15 @@ func (gw *GatewayServer) handleGetConnectedServices(ctx context.Context, req mcp
 		return mcp.NewToolResultError("Internal error; user ID not found in context"), nil
 	}
 
-	rows, err := gw.db.Query(ctx, "SELECT service_name FROM connected_services WHERE user_id = $1", userID)
+	configs, err := gw.getUserServiceConfigs(ctx, userID)
 	if err != nil {
-		log.Printf("Gateway: DB error fetching connected services for user %s: %v", userID, err)
+		log.Printf("Gateway: DB erro fetching user service configs for user %s: %v", userID, err)
 		return mcp.NewToolResultError("database error"), nil
 	}
-	defer rows.Close()
 
 	var serviceNames []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return mcp.NewToolResultError("failed to read service names"), nil
-		}
-		serviceNames = append(serviceNames, name)
+	for _, cfg := range configs {
+		serviceNames = append(serviceNames, cfg.Name)
 	}
 
 	result := map[string][]string{"services": serviceNames}
@@ -414,23 +430,22 @@ func (gw *GatewayServer) handleSearchTools(ctx context.Context, req mcp.CallTool
 
 	log.Printf("Gateway: User %s searching for tools with query %q in services %v", userID, query, servicesToSearch)
 
-	allServiceConfigs := gw.registry.GetServices()
-	var targetServices []config.ServiceConfig
+	allUserConfigs, err := gw.getUserServiceConfigs(ctx, userID)
+	if err != nil {
+		return mcp.NewToolResultError("failed to load your service configuration"), nil
+	}
 
-	if len(servicesToSearch) == 1 && servicesToSearch[0] == "*" {
-		log.Printf("Gateway: Wildcard search detected. Searching all configured services.")
-		targetServices = allServiceConfigs
-	} else {
-		serviceConfigMap := make(map[string]config.ServiceConfig)
-		for _, cfg := range allServiceConfigs {
-			serviceConfigMap[cfg.Name] = cfg
-		}
-		for _, serviceName := range servicesToSearch {
-			if cfg, ok := serviceConfigMap[serviceName]; ok {
-				targetServices = append(targetServices, cfg)
-			} else {
-				log.Printf("Gateway: WARN - User %s requested search in unknown service %s", userID, serviceName)
-			}
+	var targetServices []config.ServiceConfig
+	configMap := make(map[string]config.ServiceConfig)
+	for _, cfg := range allUserConfigs {
+		configMap[cfg.Name] = cfg
+	}
+
+	for _, serviceName := range servicesToSearch {
+		if cfg, ok := configMap[serviceName]; ok {
+			targetServices = append(targetServices, cfg)
+		} else {
+			log.Printf("Gateway: WARN - User %s requested search in service %s which is not in their config", userID, serviceName)
 		}
 	}
 
@@ -441,25 +456,18 @@ func (gw *GatewayServer) handleSearchTools(ctx context.Context, req mcp.CallTool
 
 	log.Printf("Gateway: Discovered %d total tools from services before search.", len(discoveredTools))
 
+	// TODO: Placeholder. Replace with real semantic search. For now, just return all tools that contain
+	// the query string in their name or description.
 	var foundTools []mcp.Tool
-
 	if query == "" || query == "*" {
 		log.Println("Gateway: Handling as a 'list all' query, bypassing semantic search.")
 		foundTools = discoveredTools
 	} else {
-		var searchErr error
-		foundTools, searchErr = gw.registry.SearchCapabilitiesJIT(ctx, query, discoveredTools)
-		if searchErr != nil {
-			return mcp.NewToolResultError("Search failed: " + searchErr.Error()), nil
-		}
-	}
-
-	if len(foundTools) == 0 {
-		log.Printf("Gateway: Semantic search found 0 tools for query %q.", query)
-	} else {
-		log.Printf("Gateway: Semantic search found %d tools for query %q:", len(foundTools), query)
-		for i, tool := range foundTools {
-			log.Printf("  - Result %d: %s", i+1, tool.Name)
+		for _, tool := range discoveredTools {
+			if strings.Contains(strings.ToLower(tool.Name), strings.ToLower(query)) ||
+				strings.Contains(strings.ToLower(tool.Description), strings.ToLower(query)) {
+				foundTools = append(foundTools, tool)
+			}
 		}
 	}
 
@@ -567,7 +575,6 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 		return mcp.NewToolResultError("Internal error; user ID not found in context"), nil
 	}
 
-	// This is the fully qualified tool name
 	fqn := req.GetString("tool_name", "")
 	args, ok := req.GetArguments()["tool_args"].(map[string]any)
 	if !ok {
@@ -581,9 +588,23 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 	serviceName := nameParts[0]
 	originalToolName := nameParts[1]
 
-	serviceConfig, found := gw.registry.GetServiceConfig(serviceName)
+	allUserConfigs, err := gw.getUserServiceConfigs(ctx, userID)
+	if err != nil {
+		return mcp.NewToolResultError("failed to load your service configuration"), nil
+	}
+
+	var serviceConfig config.ServiceConfig
+	var found bool
+	for _, cfg := range allUserConfigs {
+		if cfg.Name == serviceName {
+			serviceConfig = cfg
+			found = true
+			break
+		}
+	}
+
 	if !found {
-		log.Printf("Gateway: Service %q for tool %q not found in service catalog (routekit.yml)", serviceName, fqn)
+		log.Printf("Gateway: Service %q for tool %q not found in user service config", serviceName, fqn)
 		return mcp.NewToolResultErrorf("Unknown service in tool name: %s", serviceName), nil
 	}
 
