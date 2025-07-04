@@ -1,41 +1,27 @@
 version: 1
 services:
-  # - name: user-service
-  #   transport: streamable-http
-  #   url: http://localhost:8081/mcp
-
-  # - name: inventory-service
-  #   transport: streamable-http
-  #   url: http://localhost:8082/mcp
-
-  # - name: crm-service
-  #   transport: streamable-http
-  #   url: http://localhost:8083/mcp
-
-  # - name: kb-service
-  #   transport: streamable-http
-  #   url: http://localhost:8084/mcp
-
-  # - name: devops-service
-  #   transport: streamable-http
-  #   url: http://localhost:8085/mcp
-
-  # - name: support-service
-  #   transport: streamable-http
-  #   url: http://localhost:8086/mcp
-
-  # - name: bug-tracker-service
-  #   transport: streamable-http
-  #   url: http://localhost:8087/mcp
-
   - name: github
     transport: streamable-http
     url: https://api.githubcopilot.com/mcp
+    auth:
+      type: pat
   
   - name: atlassian
     transport: stdio
     command: ["npx", "-y", "mcp-remote", "https://mcp.atlassian.com/v1/sse", "--host", "localhost"]
+    auth:
+      type: oauth2.1
 
   - name: linear
     transport: stdio
     command: ["npx", "-y", "mcp-remote", "https://mcp.linear.app/sse", "--host", "localhost"]
+    auth:
+      type: oauth2.1
+
+  # EXAMPLE of how a user could add their own internal service
+  # - name: my-internal-api
+  #   transport: streamable-http
+  #   url: http://api.internal.corp:9090/mcp
+  #   auth:
+  #     type: api_key
+  #     header_name: "X-API-Key"

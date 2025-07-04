@@ -17,10 +17,9 @@ import (
 	"github.com/arnavsurve/routekit/pkg/config"
 	"github.com/arnavsurve/routekit/pkg/crypto"
 	"github.com/arnavsurve/routekit/pkg/db"
-	rk_mcp "github.com/arnavsurve/routekit/pkg/mcp"
 	"github.com/arnavsurve/routekit/pkg/registry"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/jackc/pgx"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/mark3labs/mcp-go/client"
@@ -199,10 +198,15 @@ func (gw *GatewayServer) getOrCreateClient(ctx context.Context, userID string, s
 }
 
 func (gw *GatewayServer) createClientForService(ctx context.Context, userID string, service config.ServiceConfig) (*client.Client, error) {
-	log.Printf("Gateway: Creating client for service %q with transport %q at %s", service.Name, service.Transport, service.URL)
+	log.Printf("Gateway: Creating client for service %q using auth type %q at %s", service.Name, service.Auth.Type, service.URL)
 
 	var c *client.Client
 	var err error
+
+	credentials, err := gw.getCredentialsForService(ctx, userID, service.Name)
+	if err != nil {
+		return nil, err
+	}
 
 	switch service.Transport {
 	case "stdio":
@@ -210,6 +214,8 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 			return nil, fmt.Errorf("command is required for stdio transport for service %s", service.Name)
 		}
 
+		// For stdio services like Atlassian/Linear, we need a unique config dir per user/service
+		// to isolate OAuth tokens managed by mcp-remote.
 		configDir := fmt.Sprintf("/tmp/routekit_auth/user_%s_service_%s", userID, service.Name)
 		if err := os.MkdirAll(configDir, 0755); err != nil {
 			return nil, fmt.Errorf("failed to create auth config dir: %w", err)
@@ -223,7 +229,6 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 		c, err = client.NewStdioMCPClient(command, env, args...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create stdio client for %s: %w", service.Name, err)
-
 		}
 
 		authURLChan := make(chan string)
@@ -239,7 +244,7 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 			re := regexp.MustCompile(`Please authorize this client by visiting: (https?://\S+)`)
 			for scanner.Scan() {
 				line := scanner.Text()
-				log.Printf("Gateway: [mcp-remote stderr] %s", line)
+				log.Printf("Gateway: [mcp-remote stderr (%s)] %s", service.Name, line)
 				matches := re.FindStringSubmatch(line)
 				if len(matches) > 1 {
 					authURLChan <- matches[1]
@@ -295,80 +300,72 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 		}
 
 	case "sse", "streamable-http":
-		tokenStore := rk_mcp.NewGatewayTokenStore(gw.db, userID, service.Name)
+		var opts []transport.StreamableHTTPCOption
 
-		oauthConfig := transport.OAuthConfig{
-			ClientID:     os.Getenv(strings.ToUpper(service.Name) + "_CLIENT_ID"),
-			ClientSecret: os.Getenv(strings.ToUpper(service.Name) + "_CLIENT_SECRET"),
-			RedirectURI:  "http://localhost:3000/api/connectors/" + service.Name + "/callback",
-			TokenStore:   tokenStore,
-			PKCEEnabled:  true,
-			Scopes: []string{
-				"read:jira-work", "write:jira-work", "read:confluence-content.all",
-				"write:confluence-content", "read:jira-user", "offline_access",
-			},
-		}
-
-		if service.Transport == "sse" {
-			c, err = client.NewOAuthSSEClient(service.URL, oauthConfig)
-		} else {
-			if service.Name == "github" {
-				token, err_gh := gw.getGitHubPat(ctx, userID)
-				if err_gh != nil {
-					return nil, fmt.Errorf("could not get token for %s: %w", service.Name, err_gh)
-				}
-				headers := map[string]string{"Authorization": "Bearer " + token}
-				c, err = client.NewStreamableHttpClient(service.URL, transport.WithHTTPHeaders(headers))
-			} else {
-				c, err = client.NewOAuthStreamableHttpClient(service.URL, oauthConfig)
+		switch service.Auth.Type {
+		case "pat":
+			if len(credentials) == 0 {
+				return nil, fmt.Errorf(`{"action_required": "user_authentication", "service_name": "%s"}`, service.Name)
 			}
+			opts = append(opts, transport.WithHTTPHeaders(map[string]string{"Authorization": "Bearer " + string(credentials)}))
+		case "api_key":
+			if len(credentials) == 0 {
+				return nil, fmt.Errorf(`"action_required": "user_authentication", "service_name": "%s"`, service.Name)
+			}
+			opts = append(opts, transport.WithHTTPHeaders(map[string]string{service.Auth.HeaderName: string(credentials)}))
+		case "oauth2.1":
+			return nil, fmt.Errorf("direct oauth2.1 for http transport not yet supported, use stdio with mcp-remote")
+		case "none", "":
+			// No auth needed
+		default:
+			return nil, fmt.Errorf("unsupported auth type %q for service %q", service.Auth.Type, service.Name)
 		}
 
+		c, err = client.NewStreamableHttpClient(service.URL, opts...)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create client object for %s: %w", service.Name, err)
+			return nil, fmt.Errorf("failed to create http client for %s: %w", service.Name, err)
 		}
-
-		if needsStart(c) {
-			if startErr := c.Start(ctx); startErr != nil {
-				return nil, fmt.Errorf("failed to start client transport for %s: %w", service.Name, startErr)
-			}
-		}
-
-		initCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		_, initErr := c.Initialize(initCtx, mcp.InitializeRequest{
-			Params: mcp.InitializeParams{ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION},
-		})
-		if initErr != nil {
-			c.Close()
-			return nil, fmt.Errorf("failed to initialize MCP session with %s: %w", service.Name, initErr)
-		}
-
-		return c, nil
 
 	default:
 		return nil, fmt.Errorf("unsupported transport '%q' for service '%s'", service.Transport, service.Name)
 	}
+
+	if needsStart(c) {
+		if startErr := c.Start(ctx); startErr != nil {
+			return nil, fmt.Errorf("failed to start client transport for %s: %w", service.Name, startErr)
+		}
+	}
+
+	initCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, initErr := c.Initialize(initCtx, mcp.InitializeRequest{
+		Params: mcp.InitializeParams{ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION},
+	})
+	if initErr != nil {
+		c.Close()
+		return nil, fmt.Errorf("failed to initialize MCP session with %s: %w", service.Name, initErr)
+	}
+
+	return c, nil
 }
 
-func (gw *GatewayServer) getGitHubPat(ctx context.Context, userID string) (string, error) {
+func (gw *GatewayServer) getCredentialsForService(ctx context.Context, userID string, serviceName string) ([]byte, error) {
 	var encryptedCreds []byte
-	err := gw.db.QueryRow(ctx, "SELECT credentials_encrypted FROM connected_services WHERE user_id = $1 AND service_name = 'github'", userID).Scan(&encryptedCreds)
+	err := gw.db.QueryRow(ctx, "SELECT credentials_encrypted FROM connected_services WHERE user_id = $1 AND service_name = $2", userID, serviceName).Scan(&encryptedCreds)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			// This is not an error, it just means the user hasn't connected GitHub yet.
-			// Return an empty token to signal this.
-			log.Printf("Gateway: No GitHub credentials found for user %s", userID)
-			return "", nil
+			return nil, fmt.Errorf(`{"action_required": "user_authentication", "service_name": "%s"}`, serviceName)
 		}
-		return "", err
+		return nil, fmt.Errorf("database error fetching credentials for %s: %w", serviceName, err)
 	}
-	decrypted, err := crypto.Decrypt(encryptedCreds)
-	if err != nil {
-		return "", err
+
+	if len(encryptedCreds) == 0 {
+		// This can happen for services like Linear/Atlassian where the connection record
+		// exists but credentials are not stored directly.
+		return nil, nil
 	}
-	return string(decrypted), nil
+
+	return crypto.Decrypt(encryptedCreds)
 }
 
 func (gw *GatewayServer) handleGetConnectedServices(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

@@ -12,6 +12,10 @@ type ServiceConfig struct {
 	Transport string   `yaml:"transport"`
 	URL       string   `yaml:"url,omitempty"`
 	Command   []string `yaml:"command,omitempty"`
+	Auth      struct {
+		Type       string `yaml:"type"`
+		HeaderName string `yaml:"header_name"`
+	} `yaml:"auth,omitempty"`
 }
 
 type Config struct {
