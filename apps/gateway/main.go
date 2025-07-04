@@ -19,6 +19,7 @@ import (
 	rk_mcp "github.com/arnavsurve/routekit/pkg/mcp"
 	"github.com/arnavsurve/routekit/pkg/registry"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/mark3labs/mcp-go/client"
@@ -354,6 +355,12 @@ func (gw *GatewayServer) getGitHubPat(ctx context.Context, userID string) (strin
 	var encryptedCreds []byte
 	err := gw.db.QueryRow(ctx, "SELECT credentials_encrypted FROM connected_services WHERE user_id = $1 AND service_name = 'github'", userID).Scan(&encryptedCreds)
 	if err != nil {
+		if err == pgx.ErrNoRows {
+			// This is not an error, it just means the user hasn't connected GitHub yet.
+			// Return an empty token to signal this.
+			log.Printf("Gateway: No GitHub credentials found for user %s", userID)
+			return "", nil
+		}
 		return "", err
 	}
 	decrypted, err := crypto.Decrypt(encryptedCreds)

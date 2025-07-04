@@ -70,6 +70,10 @@ func main() {
 	atlassianConnector := connectors.NewAtlassianConnector(appDB)
 	connectorManager.Register(atlassianConnector)
 
+	// Linear connector
+	linearConnector := connectors.NewLinearConnector(appDB)
+	connectorManager.Register(linearConnector)
+
 	connectorRoutes := api.Group("/connectors")
 	// For each connector, registerRoutes provides:
 	// - POST connect

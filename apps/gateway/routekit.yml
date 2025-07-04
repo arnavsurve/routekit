@@ -35,3 +35,7 @@ services:
   - name: atlassian
     transport: stdio
     command: ["npx", "-y", "mcp-remote", "https://mcp.atlassian.com/v1/sse", "--host", "localhost"]
+
+  - name: linear
+    transport: stdio
+    command: ["npx", "-y", "mcp-remote", "https://mcp.linear.app/sse", "--host", "localhost"]

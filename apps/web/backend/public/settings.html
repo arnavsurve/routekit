@@ -301,6 +301,15 @@
                         // Redirect to the backend which handles the full OAuth flow
                         window.location.href = '/api/connectors/atlassian/connect';
                     },
+                },
+                'linear': {
+                    displayName: 'Linear',
+                    connect: () => {
+                        // The auth flow for Linear is triggered by the agent, just like Atlassian.
+                        // We don't need a direct connect button action. We can just tell the user
+                        // to start using Linear tools in the chat.
+                        alert('To connect to Linear, simply ask the agent to perform a task in Linear, like "search for issues in Linear". The agent will guide you through the authentication process.');
+                    },
                 }
             };
 
