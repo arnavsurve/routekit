@@ -8,14 +8,22 @@ import (
 )
 
 type ServiceConfig struct {
-	Name      string   `yaml:"name"`
-	Transport string   `yaml:"transport"`
-	URL       string   `yaml:"url,omitempty"`
-	Command   []string `yaml:"command,omitempty"`
-	Auth      struct {
-		Type       string `yaml:"type"`
-		HeaderName string `yaml:"header_name"`
-	} `yaml:"auth,omitempty"`
+	Name      string     `yaml:"name"`
+	Transport string     `yaml:"transport"`
+	URL       string     `yaml:"url,omitempty"`
+	Command   []string   `yaml:"command,omitempty"`
+	Auth      AuthConfig `yaml:"auth"`
+}
+
+type AuthConfig struct {
+	Type             string   `yaml:"type"`
+	HeaderName       string   `yaml:"header_name,omitempty"`
+	AuthorizationURL string   `yaml:"authorization_url,omitempty"`
+	TokenURL         string   `yaml:"token_url,omitempty"`
+	ClientIDEnv      string   `yaml:"client_id_env,omitempty"`
+	ClientSecretEnv  string   `yaml:"client_secret_env,omitempty"`
+	Scopes           []string `yaml:"scopes,omitempty"`
+	Audience         string   `yaml:"audience,omitempty"`
 }
 
 type Config struct {

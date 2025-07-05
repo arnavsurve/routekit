@@ -6,7 +6,6 @@ import (
 
 	"github.com/arnavsurve/routekit/apps/web/backend/agent"
 	"github.com/arnavsurve/routekit/apps/web/backend/auth"
-	"github.com/arnavsurve/routekit/apps/web/backend/connectors"
 	"github.com/arnavsurve/routekit/apps/web/backend/services"
 	"github.com/arnavsurve/routekit/pkg/crypto"
 	"github.com/arnavsurve/routekit/pkg/db"
@@ -34,12 +33,12 @@ func main() {
 		log.Fatalf("ANTHROPIC_API_KEY environment variable not set.")
 	}
 
-	appDB := &connectors.App{
-		DBPool: db.GetPool(),
-	}
 	authHandler := &auth.Handler{
 		DBPool:    db.GetPool(),
 		JWTSecret: jwtSecret,
+	}
+	servicesHandler := &services.ServicesHandler{
+		DBPool: db.GetPool(),
 	}
 
 	e := echo.New()
@@ -56,48 +55,24 @@ func main() {
 	e.POST("/api/signup", authHandler.HandleSignup)
 	e.POST("/api/login", authHandler.HandleLogin)
 
-	// Authenticated routes
 	api := e.Group("/api")
 	api.Use(authHandler.AuthMiddleware)
 	api.GET("/me", authHandler.HandleGetMe)
 
-	// Connector routes
-	connectorManager := connectors.NewManager()
-
-	// GitHub connector
-	connectorManager.Register(connectors.NewGitHubConnector(appDB))
-
-	// Atlassian connector
-	atlassianConnector := connectors.NewAtlassianConnector(appDB)
-	connectorManager.Register(atlassianConnector)
-
-	// Linear connector
-	linearConnector := connectors.NewLinearConnector(appDB)
-	connectorManager.Register(linearConnector)
-
-	connectorRoutes := api.Group("/connectors")
-	// For each connector, registerRoutes provides:
-	// - POST connect
-	// - DELETE disconnect
-	connectorManager.RegisterRoutes(connectorRoutes)
-
-	api.GET("/connectors/atlassian/connect", atlassianConnector.Connect)
-	api.GET("/connectors/atlassian/callback", atlassianConnector.Callback)
-
-	// Connectors status
-	api.GET("/connectors/status", connectorManager.HandleGetAllStatuses)
-
-	// User service configuration
-	servicesHandler := &services.ServicesHandler{
-		DBPool: db.GetPool(),
-	}
+	// User service configuration routes
 	api.GET("/user/services", servicesHandler.HandleGetUserServices)
 	api.POST("/user/services", servicesHandler.HandleUpdateUserServices)
 
-	api.GET("/services", servicesHandler.HandleGetUserServices)
-	api.PUT("/services", servicesHandler.HandleUpdateUserServices)
+	// Generic Connector routes
+	api.POST("/connectors/:service/token", servicesHandler.HandleTokenConnect) // For PAT/API Key
+	api.GET("/connectors/:service/oauth", servicesHandler.HandleOAuthConnect) // For OAuth redirects
+	api.DELETE("/connectors/:service", servicesHandler.HandleDisconnect)
+	api.GET("/connectors/status", servicesHandler.HandleGetAllStatuses)
 
-	// WebSocket route
+	// Generic OAuth callback
+	api.GET("/connectors/callback", servicesHandler.HandleCallback)
+
+	// WebSocket route for the agent
 	e.GET("/ws", agent.HandleWebSocket, authHandler.AuthMiddleware)
 
 	log.Println("Starting webapp server on http://localhost:3000")
