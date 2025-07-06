@@ -77,12 +77,11 @@ func NewGatewayServer(dbPool *pgxpool.Pool, secret []byte) *GatewayServer {
 	)
 
 	s.AddTool(
-		mcp.NewTool("routekit_search_tools",
-			mcp.WithDescription("Search for available tools within a specified list of services."),
-			mcp.WithString("query", mcp.Required(), mcp.Description("A description of the task you want to perform.")),
-			mcp.WithArray("services_to_search", mcp.Required(), mcp.Description("A list of service names (from 'get_connected_services') to search within.")),
+		mcp.NewTool("routekit_get_service_tools",
+			mcp.WithDescription("Get all available tools from specified services."),
+			mcp.WithArray("services", mcp.Required(), mcp.Description("A list of service names (from 'get_connected_services') to get tools from.")),
 		),
-		gw.mcpAuthMiddleware(gw.handleSearchTools),
+		gw.mcpAuthMiddleware(gw.handleGetServiceTools),
 	)
 
 	s.AddTool(
@@ -186,34 +185,11 @@ func (gw *GatewayServer) getOrCreateClient(ctx context.Context, userID string, s
 	gw.clientCache.Store(cacheKey, newClient)
 	log.Printf("Gateway: Stored new client in cache for %s", cacheKey)
 
-	if transportWithCtx, ok := newClient.GetTransport().(transportWithContext); ok {
-		go func() {
-			<-transportWithCtx.Context().Done()
-			log.Printf("Gateway: Client connection for %s closed. Removing from cache.", cacheKey)
-			gw.clientCache.Delete(cacheKey)
-			gw.clientCreationLocks.Delete(cacheKey)
-		}()
-	} else if transportWithCancel, ok := newClient.GetTransport().(transportWithCancel); ok {
-		go func() {
-			ticker := time.NewTicker(30 * time.Second)
-			defer ticker.Stop()
-			for {
-				<-ticker.C
-				pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				err := newClient.Ping(pingCtx)
-				pingCancel()
-				if err != nil {
-					log.Printf("Gateway: Client for %s failed health check. Closing and removing from cache.", cacheKey)
-					transportWithCancel.Cancel()
-					gw.clientCache.Delete(cacheKey)
-					gw.clientCreationLocks.Delete(cacheKey)
-					return
-				}
-			}
-		}()
-	} else {
-		log.Printf("Gateway: Warning - transport for %s does not expose context for automatic cleanup.", service.Name)
-	}
+	// NOTE: The mcp-go Stdio transport does not expose its context, so we cannot automatically
+	// clean up the cache when the underlying process dies. The client will be removed from cache
+	// on the next request if its ping fails. This is a limitation of the current SDK.
+	// The logic for transportWithContext and transportWithCancel has been removed as it's not
+	// supported by all transports in the provided mcp-go version.
 
 	return newClient, nil
 }
@@ -397,7 +373,7 @@ func (gw *GatewayServer) handleGetConnectedServices(ctx context.Context, req mcp
 
 	configs, err := gw.getUserServiceConfigs(ctx, userID)
 	if err != nil {
-		log.Printf("Gateway: DB erro fetching user service configs for user %s: %v", userID, err)
+		log.Printf("Gateway: DB error fetching user service configs for user %s: %v", userID, err)
 		return mcp.NewToolResultError("database error"), nil
 	}
 
@@ -416,19 +392,18 @@ type SearchResult struct {
 	Tools []mcp.Tool `json:"tools"`
 }
 
-func (gw *GatewayServer) handleSearchTools(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (gw *GatewayServer) handleGetServiceTools(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	userID, ok := ctx.Value(userIDKey).(string)
 	if !ok {
 		return mcp.NewToolResultError("Internal error; user ID not found in context"), nil
 	}
 
-	query := req.GetString("query", "")
-	servicesToSearch, err := req.RequireStringSlice("services_to_search")
+	services, err := req.RequireStringSlice("services")
 	if err != nil {
-		return mcp.NewToolResultError("`services_to_search` must be a list of strings."), nil
+		return mcp.NewToolResultError("`services` must be a list of strings."), nil
 	}
 
-	log.Printf("Gateway: User %s searching for tools with query %q in services %v", userID, query, servicesToSearch)
+	log.Printf("Gateway: User %s getting tools from services %v", userID, services)
 
 	allUserConfigs, err := gw.getUserServiceConfigs(ctx, userID)
 	if err != nil {
@@ -441,11 +416,11 @@ func (gw *GatewayServer) handleSearchTools(ctx context.Context, req mcp.CallTool
 		configMap[cfg.Name] = cfg
 	}
 
-	for _, serviceName := range servicesToSearch {
+	for _, serviceName := range services {
 		if cfg, ok := configMap[serviceName]; ok {
 			targetServices = append(targetServices, cfg)
 		} else {
-			log.Printf("Gateway: WARN - User %s requested search in service %s which is not in their config", userID, serviceName)
+			log.Printf("Gateway: WARN - User %s requested tools from service %s which is not in their config", userID, serviceName)
 		}
 	}
 
@@ -454,24 +429,9 @@ func (gw *GatewayServer) handleSearchTools(ctx context.Context, req mcp.CallTool
 		return mcp.NewToolResultError(discoverErr.Error()), nil
 	}
 
-	log.Printf("Gateway: Discovered %d total tools from services before search.", len(discoveredTools))
+	log.Printf("Gateway: Discovered %d total tools from services.", len(discoveredTools))
 
-	// TODO: Placeholder. Replace with real semantic search. For now, just return all tools that contain
-	// the query string in their name or description.
-	var foundTools []mcp.Tool
-	if query == "" || query == "*" {
-		log.Println("Gateway: Handling as a 'list all' query, bypassing semantic search.")
-		foundTools = discoveredTools
-	} else {
-		for _, tool := range discoveredTools {
-			if strings.Contains(strings.ToLower(tool.Name), strings.ToLower(query)) ||
-				strings.Contains(strings.ToLower(tool.Description), strings.ToLower(query)) {
-				foundTools = append(foundTools, tool)
-			}
-		}
-	}
-
-	searchResult := SearchResult{Tools: foundTools}
+	searchResult := SearchResult{Tools: discoveredTools}
 	jsonRes, err := json.MarshalIndent(searchResult, "", "  ")
 	if err != nil {
 		return mcp.NewToolResultError("failed to serialize search results: " + err.Error()), nil
@@ -565,7 +525,11 @@ func (gw *GatewayServer) discoverUserTools(ctx context.Context, userID string, s
 		}
 	}
 
-	return allTools, firstErr
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	return allTools, nil
 }
 
 // handleExecute routes a tool call to the correct downstream service.
@@ -578,7 +542,11 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 	fqn := req.GetString("tool_name", "")
 	args, ok := req.GetArguments()["tool_args"].(map[string]any)
 	if !ok {
-		return mcp.NewToolResultError("tool_args must be an object"), nil
+		if req.GetArguments()["tool_args"] == nil {
+			args = make(map[string]any)
+		} else {
+			return mcp.NewToolResultError("tool_args must be an object"), nil
+		}
 	}
 
 	nameParts := strings.SplitN(fqn, "__", 2)

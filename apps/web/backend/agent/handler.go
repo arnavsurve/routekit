@@ -98,12 +98,12 @@ func newSessionHandler(userJWT string) (*SessionHandler, error) {
 	
 	1.  **DISCOVER SERVICES:** First, call 'routekit_get_connected_services' to see which external applications are available for the current user.
 	
-	2.  **SEARCH FOR TOOLS:** Next, call 'routekit_search_tools'. Provide a natural language 'query' describing the task and a 'services_to_search' list.
+	2.  **GET SERVICE TOOLS:** Next, call 'routekit_get_service_tools'. Provide a 'services' list containing the services you want to get tools from.
 	
-	3.  **ANALYZE RESULTS:** From the search results, identify the full 'name' of the tool you need to use. This name will include a service prefix, for example: 'atlassian__createJiraIssue'.
+	3.  **ANALYZE RESULTS:** From the tools returned, identify the full 'name' of the tool you need to use. This name will include a service prefix, for example: 'atlassian__createJiraIssue'.
 	
 	4.  **EXECUTE THE TOOL:** To run the tool you found, you MUST call 'routekit_execute'.
-		- The 'tool_name' parameter for 'routekit_execute' MUST be the full name from the search result (e.g., 'atlassian__createJiraIssue').
+		- The 'tool_name' parameter for 'routekit_execute' MUST be the full name from the tools list (e.g., 'atlassian__createJiraIssue').
 		- The 'tool_args' parameter must be an object containing the arguments for that tool.
 	
 	**CRITICAL INSTRUCTION:** You MUST NOT attempt to call tools like 'atlassian__createJiraIssue' directly. They can ONLY be run by passing their full name to the 'routekit_execute' tool.
@@ -295,25 +295,21 @@ func getMetaToolsDefinition() []anthropic.ToolUnionParam {
 		},
 	}
 
-	searchTool := anthropic.ToolParam{
-		Name:        "routekit_search_tools",
-		Description: anthropic.String("Search for available tools based on a natural language query."),
+	getServiceToolsTool := anthropic.ToolParam{
+		Name:        "routekit_get_service_tools",
+		Description: anthropic.String("Get all available tools from specified services."),
 		InputSchema: anthropic.ToolInputSchemaParam{
 			Type: "object",
 			Properties: map[string]any{
-				"query": map[string]any{
-					"type":        "string",
-					"description": "A description of the task you want to perform.",
-				},
-				"services_to_search": map[string]any{
+				"services": map[string]any{
 					"type":        "array",
-					"description": "A list of service names (from 'routekit_get_connected_services') to search within.",
+					"description": "A list of service names (from 'routekit_get_connected_services') to get tools from.",
 					"items": map[string]any{
 						"type": "string",
 					},
 				},
 			},
-			Required: []string{"query", "services_to_search"},
+			Required: []string{"services"},
 		},
 	}
 
@@ -339,7 +335,7 @@ func getMetaToolsDefinition() []anthropic.ToolUnionParam {
 
 	return []anthropic.ToolUnionParam{
 		{OfTool: &getServicesTool},
-		{OfTool: &searchTool},
+		{OfTool: &getServiceToolsTool},
 		{OfTool: &executeTool},
 	}
 }
