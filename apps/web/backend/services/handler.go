@@ -462,21 +462,72 @@ func (h *ServicesHandler) HandleGetAllStatuses(c echo.Context) error {
 	claims := user.Claims.(*auth.Claims)
 	userID := claims.UserID
 
-	rows, err := h.DBPool.Query(context.Background(), "SELECT service_name FROM connected_services WHERE user_id = $1", userID)
+	// Get all configured services
+	services, err := h.getAllUserServices(userID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to load services"})
+	}
+
+	// Get manually connected services (PAT/OAuth2.1)
+	connectedRows, err := h.DBPool.Query(context.Background(), "SELECT service_name FROM connected_services WHERE user_id = $1", userID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "db error"})
 	}
-	defer rows.Close()
+	defer connectedRows.Close()
 
-	statuses := make(map[string]any)
-	for rows.Next() {
+	connectedServices := make(map[string]bool)
+	for connectedRows.Next() {
 		var name string
-		if err := rows.Scan(&name); err != nil {
+		if err := connectedRows.Scan(&name); err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "db scan error"})
 		}
-		statuses[name] = map[string]any{"connected": true}
+		connectedServices[name] = true
 	}
+
+	// Build status for all services
+	statuses := make(map[string]any)
+	for _, service := range services {
+		if service.AuthType == "mcp_remote_managed" {
+			// SSE services with mcp-remote are always "ready" - they connect when first used
+			statuses[service.Name] = map[string]any{
+				"connected": true,
+				"type":      "mcp_remote_managed",
+			}
+		} else {
+			// PAT/OAuth2.1 services need manual connection
+			connected := connectedServices[service.Name]
+			statuses[service.Name] = map[string]any{
+				"connected": connected,
+				"type":      service.AuthType,
+			}
+		}
+	}
+
 	return c.JSON(http.StatusOK, statuses)
+}
+
+// Helper to get all user services without decryption
+func (h *ServicesHandler) getAllUserServices(userID string) ([]config.ServiceConfig, error) {
+	rows, err := h.DBPool.Query(context.Background(), `
+		SELECT service_name, auth_type
+		FROM user_service_configs 
+		WHERE user_id = $1
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var services []config.ServiceConfig
+	for rows.Next() {
+		var service config.ServiceConfig
+		err := rows.Scan(&service.Name, &service.AuthType)
+		if err != nil {
+			return nil, err
+		}
+		services = append(services, service)
+	}
+	return services, nil
 }
 
 func generateRandomString(length int) (string, error) {

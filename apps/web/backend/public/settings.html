@@ -13,9 +13,8 @@
         .nav a.active { color: #007bff; border-bottom: 2px solid #007bff; }
         h1 { margin-bottom: 10px; }
         p { margin-top: 0; color: #666; }
-        .content-wrapper { display: flex; gap: 20px; align-items: flex-start; }
-        .services-container { flex: 2; }
-        .status-container { flex: 1; }
+        .content-wrapper { display: block; }
+        .services-container { width: 100%; max-width: 800px; margin: 0 auto; }
         .card { border: 1px solid #eaeaea; border-radius: 8px; padding: 20px; background-color: white; margin-bottom: 20px; }
         .card-header { margin-bottom: 15px; display: flex; justify-content: between; align-items: center; }
         .card-header h2 { margin: 0; font-size: 18px; flex: 1; }
@@ -78,16 +77,6 @@
                     </div>
                 </div>
                 <div id="message-area" class="message"></div>
-            </div>
-            <div class="status-container">
-                <div class="card">
-                    <div class="card-header">
-                        <h2>Connection Status</h2>
-                    </div>
-                    <div id="connectors-status-list">
-                        <p>Loading connection statuses...</p>
-                    </div>
-                </div>
             </div>
         </div>
     </div>
@@ -182,16 +171,21 @@
             }
 
             await loadServices();
-            await renderStatusUI();
         });
 
         async function loadServices() {
             const servicesList = document.getElementById('services-list');
             try {
-                const response = await fetch('/api/user/services');
-                if (!response.ok) throw new Error('Failed to load services');
+                const [servicesResponse, statusResponse] = await Promise.all([
+                    fetch('/api/user/services'),
+                    fetch('/api/connectors/status')
+                ]);
                 
-                const services = await response.json();
+                if (!servicesResponse.ok) throw new Error('Failed to load services');
+                if (!statusResponse.ok) throw new Error('Failed to load statuses');
+                
+                const services = await servicesResponse.json();
+                const statuses = await statusResponse.json();
                 
                 servicesList.innerHTML = '';
                 if (services.length === 0) {
@@ -200,6 +194,12 @@
                 }
 
                 services.forEach(service => {
+                    const status = statuses[service.service_name];
+                    const isConnected = status?.connected || false;
+                    const statusText = service.auth_type === 'mcp_remote_managed' ? 
+                        'Ready (connects automatically)' : 
+                        (isConnected ? 'Connected' : 'Not connected');
+                    
                     const serviceHtml = `
                         <div class="service-item">
                             <div class="service-header">
@@ -207,6 +207,10 @@
                                 <button class="btn btn-danger" onclick="deleteService('${service.id}')">Delete</button>
                             </div>
                             <div class="service-details">
+                                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                                    <div class="status-indicator ${isConnected ? 'status-connected' : 'status-disconnected'}"></div>
+                                    <span>${statusText}</span>
+                                </div>
                                 <div><strong>Transport:</strong> ${service.transport_type}</div>
                                 <div><strong>URL:</strong> ${service.mcp_server_url}</div>
                                 <div><strong>Auth:</strong> ${service.auth_type}</div>
@@ -219,44 +223,6 @@
             }
         }
 
-        async function renderStatusUI() {
-            const statusList = document.getElementById('connectors-status-list');
-            try {
-                const response = await fetch('/api/connectors/status');
-                if (!response.ok) throw new Error('Failed to load statuses');
-                
-                const statuses = await response.json();
-                
-                statusList.innerHTML = '';
-                if (Object.keys(statuses).length === 0) {
-                    statusList.innerHTML = '<p>No services to show connection status for.</p>';
-                    return;
-                }
-
-                Object.entries(statuses).forEach(([serviceName, status]) => {
-                    const isConnected = status.connected || false;
-                    const connectorHtml = `
-                        <div class="connector-info">
-                            <div>
-                                <h3>${serviceName}</h3>
-                                <div style="display: flex; align-items: center; gap: 8px;">
-                                    <div class="status-indicator ${isConnected ? 'status-connected' : 'status-disconnected'}"></div>
-                                    <span>${isConnected ? 'Connected' : 'Disconnected'}</span>
-                                </div>
-                            </div>
-                            <div class="connector-actions">
-                                ${isConnected ? 
-                                    `<button class="btn btn-danger" onclick="disconnectService('${serviceName}')">Disconnect</button>` :
-                                    `<button class="btn" onclick="connectService('${serviceName}')">Connect</button>`
-                                }
-                            </div>
-                        </div>`;
-                    statusList.insertAdjacentHTML('beforeend', connectorHtml);
-                });
-            } catch (error) {
-                statusList.innerHTML = '<p>Error loading connection statuses: ' + error.message + '</p>';
-            }
-        }
 
         function openAddServiceModal() {
             document.getElementById('addServiceModal').style.display = 'block';
@@ -331,7 +297,6 @@
                 showMessage('Service added successfully!', 'success');
                 closeAddServiceModal();
                 await loadServices();
-                await renderStatusUI();
             } catch (error) {
                 showMessage('Error adding service: ' + error.message, 'error');
             }
@@ -352,55 +317,11 @@
 
                 showMessage('Service deleted successfully!', 'success');
                 await loadServices();
-                await renderStatusUI();
             } catch (error) {
                 showMessage('Error deleting service: ' + error.message, 'error');
             }
         }
 
-        async function connectService(serviceName) {
-            // First check if this is an SSE service that's managed by mcp-remote
-            const services = await fetch('/api/user/services').then(r => r.json());
-            const service = services.find(s => s.service_name === serviceName);
-            
-            if (service && service.auth_type === 'mcp_remote_managed') {
-                showMessage(`${serviceName} uses mcp-remote for authentication. The first time you use it through the agent, you'll be prompted to authenticate in your browser.`, 'success');
-                return;
-            }
-            
-            // Handle other auth types
-            if (service && service.auth_type === 'pat') {
-                const token = prompt(`Please enter your Personal Access Token for ${serviceName}:`);
-                if (token) {
-                    await fetch(`/api/connectors/${serviceName}/token`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ token: token })
-                    });
-                    await renderStatusUI();
-                }
-            } else if (service && service.auth_type === 'oauth2.1') {
-                // Redirect to OAuth flow
-                window.location.href = `/api/connectors/${serviceName}/oauth`;
-            }
-        }
-
-        async function disconnectService(serviceName) {
-            if (!confirm(`Are you sure you want to disconnect ${serviceName}?`)) return;
-            
-            try {
-                const response = await fetch(`/api/connectors/${serviceName}`, {
-                    method: 'DELETE'
-                });
-
-                if (!response.ok) throw new Error('Failed to disconnect service');
-                
-                showMessage('Service disconnected successfully!', 'success');
-                await renderStatusUI();
-            } catch (error) {
-                showMessage('Error disconnecting service: ' + error.message, 'error');
-            }
-        }
 
         function showMessage(text, type) {
             const messageArea = document.getElementById('message-area');
