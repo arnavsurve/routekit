@@ -17,7 +17,6 @@ import (
 	"github.com/arnavsurve/routekit/pkg/config"
 	"github.com/arnavsurve/routekit/pkg/crypto"
 	"github.com/arnavsurve/routekit/pkg/db"
-	"github.com/arnavsurve/routekit/pkg/registry"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,7 +25,6 @@ import (
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"gopkg.in/yaml.v2"
 )
 
 type transportWithContext interface {
@@ -44,7 +42,6 @@ type Claims struct {
 
 type GatewayServer struct {
 	mcpServer           *server.MCPServer
-	registry            *registry.Registry
 	db                  *pgxpool.Pool
 	jwtSecret           []byte
 	clientCache         *sync.Map
@@ -62,7 +59,6 @@ func NewGatewayServer(dbPool *pgxpool.Pool, secret []byte) *GatewayServer {
 
 	gw := &GatewayServer{
 		mcpServer:           s,
-		registry:            registry.New(dbPool),
 		db:                  dbPool,
 		jwtSecret:           secret,
 		clientCache:         &sync.Map{},
@@ -127,23 +123,57 @@ func (gw *GatewayServer) mcpAuthMiddleware(next server.ToolHandlerFunc) server.T
 }
 
 func (gw *GatewayServer) getUserServiceConfigs(ctx context.Context, userID string) ([]config.ServiceConfig, error) {
-	var configYAML string
-	err := gw.db.QueryRow(ctx, "SELECT config_yaml FROM user_service_configs WHERE user_id = $1", userID).Scan(&configYAML)
+	rows, err := gw.db.Query(ctx, `
+		SELECT id, service_name, transport_type, mcp_server_url, auth_type, 
+		       auth_config_encrypted, scopes, audience
+		FROM user_service_configs 
+		WHERE user_id = $1
+	`, userID)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return []config.ServiceConfig{}, nil
+		return nil, fmt.Errorf("failed to get user service configs: %w", err)
+	}
+	defer rows.Close()
+
+	var services []config.ServiceConfig
+	for rows.Next() {
+		var service config.ServiceConfig
+		var authConfigEncrypted []byte
+		var scopesJSON []byte
+
+		err := rows.Scan(
+			&service.ID, &service.Name, &service.TransportType, &service.MCPServerURL,
+			&service.AuthType, &authConfigEncrypted, &scopesJSON, &service.Audience,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan service config: %w", err)
 		}
-		return nil, fmt.Errorf("failed to get user service config: %w", err)
+
+		// Parse scopes JSON
+		var scopes []string
+		if scopesJSON != nil {
+			if err := json.Unmarshal(scopesJSON, &scopes); err != nil {
+				scopes = []string{}
+			}
+		} else {
+			scopes = []string{}
+		}
+
+		// Decrypt auth config
+		authConfigJSON, err := crypto.Decrypt(authConfigEncrypted)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt auth config: %w", err)
+		}
+
+		if err := json.Unmarshal(authConfigJSON, &service.AuthConfig); err != nil {
+			return nil, fmt.Errorf("failed to parse auth config: %w", err)
+		}
+
+		service.UserID = userID
+		service.Scopes = scopes
+		services = append(services, service)
 	}
 
-	var serviceFile struct {
-		Services []config.ServiceConfig `yaml:"services"`
-	}
-	if err := yaml.Unmarshal([]byte(configYAML), &serviceFile); err != nil {
-		return nil, fmt.Errorf("failed to parse user service config YAML: %w", err)
-	}
-
-	return serviceFile.Services, nil
+	return services, nil
 }
 
 func (gw *GatewayServer) getOrCreateClient(ctx context.Context, userID string, service config.ServiceConfig) (*client.Client, error) {
@@ -195,20 +225,25 @@ func (gw *GatewayServer) getOrCreateClient(ctx context.Context, userID string, s
 }
 
 func (gw *GatewayServer) createClientForService(ctx context.Context, userID string, service config.ServiceConfig) (*client.Client, error) {
-	log.Printf("Gateway: Creating client for service %q using auth type %q at %s", service.Name, service.Auth.Type, service.URL)
+	log.Printf("Gateway: Creating client for service %q using auth type %q at %s", service.Name, service.AuthType, service.MCPServerURL)
 
 	var c *client.Client
+	var credentials []byte
 	var err error
-
-	credentials, err := gw.getCredentialsForService(ctx, userID, service.Name)
-	if err != nil {
-		return nil, err
+	
+	// For mcp_remote_managed services, credentials are handled automatically by mcp-remote
+	if service.AuthType != "mcp_remote_managed" {
+		credentials, err = gw.getCredentialsForService(ctx, userID, service.Name)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	switch service.Transport {
+	switch service.GetTransport() {
 	case "stdio":
-		if len(service.Command) == 0 {
-			return nil, fmt.Errorf("command is required for stdio transport for service %s", service.Name)
+		command := service.GenerateCommand()
+		if len(command) == 0 {
+			return nil, fmt.Errorf("command generation failed for service %s", service.Name)
 		}
 
 		// For stdio services like Atlassian/Linear, we need a unique config dir per user/service
@@ -220,10 +255,10 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 
 		env := []string{"MCP_REMOTE_CONFIG_DIR=" + configDir}
 
-		command := service.Command[0]
-		args := service.Command[1:]
+		cmdName := command[0]
+		args := command[1:]
 
-		c, err = client.NewStdioMCPClient(command, env, args...)
+		c, err = client.NewStdioMCPClient(cmdName, env, args...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create stdio client for %s: %w", service.Name, err)
 		}
@@ -296,35 +331,28 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 			return nil, fmt.Errorf("timeout waiting for stdio client initialization for %s", service.Name)
 		}
 
-	case "sse", "streamable-http":
+	case "streamable-http":
 		var opts []transport.StreamableHTTPCOption
 
-		switch service.Auth.Type {
+		switch service.AuthType {
 		case "pat":
 			if len(credentials) == 0 {
 				return nil, fmt.Errorf(`{"action_required": "user_authentication", "service_name": "%s"}`, service.Name)
 			}
 			opts = append(opts, transport.WithHTTPHeaders(map[string]string{"Authorization": "Bearer " + string(credentials)}))
-		case "api_key":
-			if len(credentials) == 0 {
-				return nil, fmt.Errorf(`"action_required": "user_authentication", "service_name": "%s"`, service.Name)
-			}
-			opts = append(opts, transport.WithHTTPHeaders(map[string]string{service.Auth.HeaderName: string(credentials)}))
 		case "oauth2.1":
 			return nil, fmt.Errorf("direct oauth2.1 for http transport not yet supported, use stdio with mcp-remote")
-		case "none", "":
-			// No auth needed
 		default:
-			return nil, fmt.Errorf("unsupported auth type %q for service %q", service.Auth.Type, service.Name)
+			return nil, fmt.Errorf("unsupported auth type %q for service %q", service.AuthType, service.Name)
 		}
 
-		c, err = client.NewStreamableHttpClient(service.URL, opts...)
+		c, err = client.NewStreamableHttpClient(service.GetURL(), opts...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create http client for %s: %w", service.Name, err)
 		}
 
 	default:
-		return nil, fmt.Errorf("unsupported transport '%q' for service '%s'", service.Transport, service.Name)
+		return nil, fmt.Errorf("unsupported transport '%q' for service '%s'", service.GetTransport(), service.Name)
 	}
 
 	if needsStart(c) {

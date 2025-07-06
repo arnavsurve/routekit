@@ -3,8 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <title>Routekit - Settings</title>
-    <!-- We'll use a library to parse YAML on the frontend -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; color: #333; background-color: #f9fafb; }
         .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
@@ -16,25 +14,44 @@
         h1 { margin-bottom: 10px; }
         p { margin-top: 0; color: #666; }
         .content-wrapper { display: flex; gap: 20px; align-items: flex-start; }
-        .editor-container { flex: 2; }
+        .services-container { flex: 2; }
         .status-container { flex: 1; }
-        textarea { width: 100%; height: 60vh; font-family: monospace; font-size: 14px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; resize: vertical; box-sizing: border-box; }
-        button { background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 16px; margin-top: 10px; }
-        button:hover { background-color: #0056b3; }
-        .message { margin-top: 10px; padding: 10px; border-radius: 4px; display: none; }
-        .success { background-color: #d4edda; color: #155724; }
-        .error { background-color: #f8d7da; color: #721c24; }
-        .card { border: 1px solid #eaeaea; border-radius: 8px; padding: 20px; background-color: white; }
-        .card-header { margin-bottom: 15px; }
-        .card-header h2 { margin: 0; font-size: 18px; }
+        .card { border: 1px solid #eaeaea; border-radius: 8px; padding: 20px; background-color: white; margin-bottom: 20px; }
+        .card-header { margin-bottom: 15px; display: flex; justify-content: between; align-items: center; }
+        .card-header h2 { margin: 0; font-size: 18px; flex: 1; }
+        .btn { display: inline-block; background-color: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; text-decoration: none; text-align: center; }
+        .btn:hover { background-color: #0056b3; }
+        .btn-danger { background-color: #dc3545; }
+        .btn-danger:hover { background-color: #c82333; }
+        .btn-success { background-color: #28a745; }
+        .btn-success:hover { background-color: #218838; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: 500; }
+        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
+        .form-group textarea { height: 80px; resize: vertical; }
+        .form-row { display: flex; gap: 15px; }
+        .form-row .form-group { flex: 1; }
+        .service-item { border: 1px solid #eaeaea; border-radius: 8px; padding: 15px; margin-bottom: 15px; background-color: #fafbfc; }
+        .service-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .service-header h3 { margin: 0; font-size: 16px; }
+        .service-details { font-size: 14px; color: #666; }
+        .service-details div { margin-bottom: 5px; }
         .connector-info { display: flex; justify-content: space-between; align-items: center; padding: 15px 0; border-bottom: 1px solid #eaeaea; }
         .connector-info:last-child { border-bottom: none; }
         .status-indicator { width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; display: inline-block; }
         .status-connected { background-color: #28a745; }
         .status-disconnected { background-color: #dc3545; }
-        .btn { display: inline-block; background-color: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; text-decoration: none; text-align: center; }
-        .btn-danger { background-color: #dc3545; }
-        .btn-danger:hover { background-color: #c82333; }
+        .message { margin-top: 10px; padding: 10px; border-radius: 4px; display: none; }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
+        .modal-content { background-color: white; margin: 5% auto; padding: 20px; border-radius: 8px; width: 90%; max-width: 600px; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .modal-header h2 { margin: 0; }
+        .close { color: #aaa; font-size: 28px; font-weight: bold; cursor: pointer; }
+        .close:hover { color: #000; }
+        .oauth-fields { display: none; }
+        .oauth-fields.show { display: block; }
     </style>
 </head>
 <body>
@@ -48,16 +65,18 @@
     </div>
     <div class="container">
         <h1>Service Configuration</h1>
-        <p>Define the MCP services you want Routekit to connect to using YAML. This configuration is the source of truth for your agent.</p>
+        <p>Configure the MCP services you want Routekit to connect to.</p>
         <div class="content-wrapper">
-            <div class="editor-container">
-                <form id="config-form">
-                    <textarea id="config-yaml" placeholder="version: 1
-services:
-  - name: my-service
-    ..."></textarea>
-                    <button type="submit">Save Configuration</button>
-                </form>
+            <div class="services-container">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Your Services</h2>
+                        <button class="btn" onclick="openAddServiceModal()">+ Add Service</button>
+                    </div>
+                    <div id="services-list">
+                        <p>Loading services...</p>
+                    </div>
+                </div>
                 <div id="message-area" class="message"></div>
             </div>
             <div class="status-container">
@@ -66,10 +85,90 @@ services:
                         <h2>Connection Status</h2>
                     </div>
                     <div id="connectors-status-list">
-                        <p>Save your configuration to see connection statuses.</p>
+                        <p>Loading connection statuses...</p>
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- Add Service Modal -->
+    <div id="addServiceModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Add New Service</h2>
+                <span class="close" onclick="closeAddServiceModal()">&times;</span>
+            </div>
+            <form id="service-form">
+                <div class="form-group">
+                    <label for="service-name">Service Name</label>
+                    <input type="text" id="service-name" name="service_name" required placeholder="e.g., My GitHub Server">
+                </div>
+                <div class="form-group">
+                    <label for="transport-type">Transport Type</label>
+                    <select id="transport-type" name="transport_type" required>
+                        <option value="">Select transport type</option>
+                        <option value="streamable-http">Streamable HTTP</option>
+                        <option value="sse">Server-Sent Events (SSE)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="mcp-server-url">MCP Server URL</label>
+                    <input type="url" id="mcp-server-url" name="mcp_server_url" required placeholder="https://api.example.com/mcp">
+                </div>
+                <div class="form-group">
+                    <label for="auth-type">Authentication Type</label>
+                    <select id="auth-type" name="auth_type" required onchange="toggleOAuthFields()">
+                        <option value="">Select authentication type</option>
+                        <option value="pat">Personal Access Token</option>
+                        <option value="oauth2.1">OAuth 2.1</option>
+                    </select>
+                </div>
+                <div class="oauth-fields" id="oauth-fields">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="client-id">Client ID</label>
+                            <input type="text" id="client-id" name="client_id" placeholder="Your OAuth client ID">
+                        </div>
+                        <div class="form-group">
+                            <label for="client-secret">Client Secret</label>
+                            <input type="password" id="client-secret" name="client_secret" placeholder="Your OAuth client secret">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="authorization-url">Authorization URL</label>
+                            <input type="url" id="authorization-url" name="authorization_url" placeholder="https://provider.com/oauth/authorize">
+                        </div>
+                        <div class="form-group">
+                            <label for="token-url">Token URL</label>
+                            <input type="url" id="token-url" name="token_url" placeholder="https://provider.com/oauth/token">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="scopes">Scopes (optional)</label>
+                        <textarea id="scopes" name="scopes" placeholder="read write admin (space-separated)"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="audience">Audience (optional)</label>
+                        <input type="text" id="audience" name="audience" placeholder="api.example.com">
+                    </div>
+                </div>
+                <div class="sse-info" id="sse-info" style="display: none;">
+                    <div style="background-color: #e3f2fd; padding: 15px; border-radius: 4px; margin-bottom: 15px;">
+                        <h4 style="margin: 0 0 10px 0; color: #1976d2;">SSE Service Configuration</h4>
+                        <p style="margin: 0; font-size: 14px; color: #424242;">
+                            For SSE services, <code>mcp-remote</code> handles OAuth authentication automatically. 
+                            You only need to provide the service name and MCP server URL. 
+                            The first time you connect, you'll be prompted to authenticate in your browser.
+                        </p>
+                    </div>
+                </div>
+                <div style="text-align: right; margin-top: 20px;">
+                    <button type="button" onclick="closeAddServiceModal()" style="margin-right: 10px;">Cancel</button>
+                    <button type="submit" class="btn">Add Service</button>
+                </div>
+            </form>
         </div>
     </div>
 
@@ -82,176 +181,234 @@ services:
                 return; // checkAuth handles the redirect
             }
 
-            const configTextarea = document.getElementById('config-yaml');
-            const configForm = document.getElementById('config-form');
-            const messageArea = document.getElementById('message-area');
-            const statusList = document.getElementById('connectors-status-list');
+            await loadServices();
+            await renderStatusUI();
+        });
 
-            // --- Load existing config on page load ---
+        async function loadServices() {
+            const servicesList = document.getElementById('services-list');
             try {
                 const response = await fetch('/api/user/services');
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data.config_yaml) {
-                        configTextarea.value = data.config_yaml;
-                    } else {
-                        // Pre-populate with a helpful example if the user has no config yet
-                        configTextarea.value = `# Example Service Configurations\n` +
-                            `version: 1\n` +
-                            `services:\n` +
-                            `  - name: github\n` +
-                            `    transport: streamable-http\n` +
-                            `    url: https://api.githubcopilot.com/mcp\n` +
-                            `    auth:\n` +
-                            `      type: pat\n\n` +
-                            `  - name: atlassian\n` +
-                            `    transport: stdio\n` +
-                            `    command: ["npx", "-y", "mcp-remote", "https://mcp.atlassian.com/v1/sse", "--host", "localhost"]\n` +
-                            `    auth:\n` +
-                            `      type: oauth2.1\n` +
-                            `      authorization_url: "https://auth.atlassian.com/authorize"\n` +
-                            `      token_url: "https://auth.atlassian.com/oauth/token"\n` +
-                            `      client_id_env: "ATLASSIAN_CLIENT_ID"\n` +
-                            `      client_secret_env: "ATLASSIAN_CLIENT_SECRET"\n` +
-                            `      scopes:\n` +
-                            `        - "read:jira-work"\n` +
-                            `        - "write:jira-work"\n` +
-                            `        - "read:jira-user"\n` +
-                            `        - "offline_access"\n` +
-                            `      audience: "api.atlassian.com"\n\n`+
-                            `  - name: linear\n` +
-                            `    transport: stdio\n` +
-                            `    command: ["npx", "-y", "mcp-remote", "https://mcp.linear.app/sse", "--host", "localhost"]\n` +
-                            `    auth:\n` +
-                            `      type: oauth2.1\n` +
-                            `      authorization_url: "https://linear.app/oauth/authorize"\n` +
-                            `      token_url: "https://api.linear.app/oauth/token"\n` +
-                            `      client_id_env: "LINEAR_CLIENT_ID"\n` +
-                            `      client_secret_env: "LINEAR_CLIENT_SECRET"\n` +
-                            `      scopes: ["read", "write"]`;
-                    }
-                    await renderStatusUI();
-                } else {
-                    showMessage('Could not load your configuration.', 'error');
+                if (!response.ok) throw new Error('Failed to load services');
+                
+                const services = await response.json();
+                
+                servicesList.innerHTML = '';
+                if (services.length === 0) {
+                    servicesList.innerHTML = '<p>No services configured yet. Click "Add Service" to get started.</p>';
+                    return;
                 }
+
+                services.forEach(service => {
+                    const serviceHtml = `
+                        <div class="service-item">
+                            <div class="service-header">
+                                <h3>${service.service_name}</h3>
+                                <button class="btn btn-danger" onclick="deleteService('${service.id}')">Delete</button>
+                            </div>
+                            <div class="service-details">
+                                <div><strong>Transport:</strong> ${service.transport_type}</div>
+                                <div><strong>URL:</strong> ${service.mcp_server_url}</div>
+                                <div><strong>Auth:</strong> ${service.auth_type}</div>
+                            </div>
+                        </div>`;
+                    servicesList.insertAdjacentHTML('beforeend', serviceHtml);
+                });
             } catch (error) {
-                showMessage('Error loading configuration: ' + error.message, 'error');
+                servicesList.innerHTML = '<p>Error loading services: ' + error.message + '</p>';
             }
+        }
 
-            // --- Handle form submission to save the YAML config ---
-            configForm.addEventListener('submit', async (e) => {
-                e.preventDefault();
-                const configYAML = configTextarea.value;
-                try {
-                    const response = await fetch('/api/user/services', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ config_yaml: configYAML })
-                    });
-                    const data = await response.json();
-                    if (!response.ok) throw new Error(data.error || 'Failed to save configuration.');
-                    showMessage('Configuration saved successfully!', 'success');
-                    await renderStatusUI(); // Re-render statuses after saving
-                } catch (error) {
-                    showMessage('Error saving configuration: ' + error.message, 'error');
+        async function renderStatusUI() {
+            const statusList = document.getElementById('connectors-status-list');
+            try {
+                const response = await fetch('/api/connectors/status');
+                if (!response.ok) throw new Error('Failed to load statuses');
+                
+                const statuses = await response.json();
+                
+                statusList.innerHTML = '';
+                if (Object.keys(statuses).length === 0) {
+                    statusList.innerHTML = '<p>No services to show connection status for.</p>';
+                    return;
                 }
-            });
 
-            // --- Main UI rendering function ---
-            async function renderStatusUI() {
-                statusList.innerHTML = '<p>Loading statuses...</p>';
-                try {
-                    const [statusRes, configRes] = await Promise.all([
-                        fetch('/api/connectors/status'),
-                        fetch('/api/user/services')
-                    ]);
-                    if (!statusRes.ok || !configRes.ok) throw new Error('Failed to fetch data to render UI.');
-
-                    const statuses = await statusRes.json();
-                    const configData = await configRes.json();
-                    if (!configData.config_yaml) {
-                         statusList.innerHTML = '<p>Save a configuration to see connection statuses.</p>';
-                         return;
-                    }
-                    const userConfig = jsyaml.load(configData.config_yaml);
-
-                    statusList.innerHTML = '';
-                    if (!userConfig || !userConfig.services) {
-                        statusList.innerHTML = '<p>No services defined in your configuration.</p>';
-                        return;
-                    }
-
-                    userConfig.services.forEach(service => {
-                        const isConnected = statuses[service.name]?.connected || false;
-                        const authType = service.auth?.type;
-
-                        let connectActionHtml = '';
-                        // Dynamically create the correct button/link based on auth type
-                        if (!isConnected) {
-                            if (authType === 'pat' || authType === 'api_key') {
-                                connectActionHtml = `<button class="btn" data-action="connect_token">Connect</button>`;
-                            } else if (authType === 'oauth2.1') {
-                                // This now correctly points to the generic OAuth endpoint
-                                connectActionHtml = `<a href="/api/connectors/${service.name}/oauth" class="btn">Connect</a>`;
-                            }
-                        }
-
-                        const connectorHtml = `
-                            <div class="connector-info" data-service="${service.name}">
-                                <div>
-                                    <h3>${service.name}</h3>
-                                    <div style="display: flex; align-items: center; gap: 8px;">
-                                        <div class="status-indicator ${isConnected ? 'status-connected' : 'status-disconnected'}"></div>
-                                        <span>${isConnected ? 'Connected' : 'Disconnected'}</span>
-                                    </div>
+                Object.entries(statuses).forEach(([serviceName, status]) => {
+                    const isConnected = status.connected || false;
+                    const connectorHtml = `
+                        <div class="connector-info">
+                            <div>
+                                <h3>${serviceName}</h3>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <div class="status-indicator ${isConnected ? 'status-connected' : 'status-disconnected'}"></div>
+                                    <span>${isConnected ? 'Connected' : 'Disconnected'}</span>
                                 </div>
-                                <div class="connector-actions">
-                                    ${isConnected ? `<button class="btn btn-danger" data-action="disconnect">Disconnect</button>` : connectActionHtml}
-                                </div>
-                            </div>`;
-                        statusList.insertAdjacentHTML('beforeend', connectorHtml);
-                    });
+                            </div>
+                            <div class="connector-actions">
+                                ${isConnected ? 
+                                    `<button class="btn btn-danger" onclick="disconnectService('${serviceName}')">Disconnect</button>` :
+                                    `<button class="btn" onclick="connectService('${serviceName}')">Connect</button>`
+                                }
+                            </div>
+                        </div>`;
+                    statusList.insertAdjacentHTML('beforeend', connectorHtml);
+                });
+            } catch (error) {
+                statusList.innerHTML = '<p>Error loading connection statuses: ' + error.message + '</p>';
+            }
+        }
 
-                } catch (error) {
-                    console.error("Error rendering status UI:", error);
-                    statusList.innerHTML = '<p>Could not load connection statuses. Please check your YAML and save again.</p>';
+        function openAddServiceModal() {
+            document.getElementById('addServiceModal').style.display = 'block';
+        }
+
+        function closeAddServiceModal() {
+            document.getElementById('addServiceModal').style.display = 'none';
+            document.getElementById('service-form').reset();
+            document.getElementById('oauth-fields').classList.remove('show');
+        }
+
+        function toggleOAuthFields() {
+            const transportType = document.getElementById('transport-type').value;
+            const authType = document.getElementById('auth-type').value;
+            const oauthFields = document.getElementById('oauth-fields');
+            const sseInfo = document.getElementById('sse-info');
+            
+            // Show SSE info for SSE transport
+            if (transportType === 'sse') {
+                sseInfo.style.display = 'block';
+                oauthFields.classList.remove('show'); // Hide OAuth fields for SSE
+            } else {
+                sseInfo.style.display = 'none';
+                // Show OAuth fields only for streamable-http with oauth2.1
+                if (authType === 'oauth2.1') {
+                    oauthFields.classList.add('show');
+                } else {
+                    oauthFields.classList.remove('show');
                 }
             }
+        }
+        
+        // Also trigger on transport type change
+        document.getElementById('transport-type').addEventListener('change', toggleOAuthFields);
 
-            // --- Generic event handler for all buttons in the status list ---
-            statusList.addEventListener('click', async (e) => {
-                const button = e.target.closest('button');
-                if (!button) return; // Ignore clicks that aren't on a button
+        document.getElementById('service-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData(e.target);
+            const serviceData = {
+                service_name: formData.get('service_name'),
+                transport_type: formData.get('transport_type'),
+                mcp_server_url: formData.get('mcp_server_url'),
+                auth_type: formData.get('auth_type')
+            };
 
-                e.preventDefault();
-                const serviceName = button.closest('.connector-info').dataset.service;
-                const action = button.dataset.action;
+            // For SSE services, mcp-remote handles OAuth automatically - no manual config needed
+            if (serviceData.transport_type === 'sse') {
+                serviceData.auth_type = 'mcp_remote_managed'; // Special auth type for mcp-remote
+            } else if (serviceData.auth_type === 'oauth2.1') {
+                // Only for streamable-http services that need manual OAuth config
+                serviceData.client_id = formData.get('client_id');
+                serviceData.client_secret = formData.get('client_secret');
+                serviceData.authorization_url = formData.get('authorization_url');
+                serviceData.token_url = formData.get('token_url');
+                serviceData.scopes = formData.get('scopes') ? formData.get('scopes').split(' ').filter(s => s.trim()) : [];
+                serviceData.audience = formData.get('audience') || null;
+            }
 
-                if (action === 'disconnect') {
-                    if (!confirm(`Are you sure you want to disconnect ${serviceName}?`)) return;
-                    await fetch(`/api/connectors/${serviceName}`, { method: 'DELETE' });
-                    await renderStatusUI();
-                } else if (action === 'connect_token') {
-                    const token = prompt(`Please enter your Personal Access Token for ${serviceName}:`);
-                    if (token) {
-                        // Point to the specific endpoint for token-based auth
-                        await fetch(`/api/connectors/${serviceName}/token`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ token: token })
-                        });
-                        await renderStatusUI();
-                    }
+            try {
+                const response = await fetch('/api/user/services', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(serviceData)
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Failed to add service');
                 }
-            });
 
-            function showMessage(text, type) {
-                messageArea.textContent = text;
-                messageArea.className = `message ${type}`;
-                messageArea.style.display = 'block';
-                setTimeout(() => { messageArea.style.display = 'none'; }, 5000);
+                showMessage('Service added successfully!', 'success');
+                closeAddServiceModal();
+                await loadServices();
+                await renderStatusUI();
+            } catch (error) {
+                showMessage('Error adding service: ' + error.message, 'error');
             }
         });
+
+        async function deleteService(serviceId) {
+            if (!confirm('Are you sure you want to delete this service?')) return;
+            
+            try {
+                const response = await fetch(`/api/user/services/${serviceId}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Failed to delete service');
+                }
+
+                showMessage('Service deleted successfully!', 'success');
+                await loadServices();
+                await renderStatusUI();
+            } catch (error) {
+                showMessage('Error deleting service: ' + error.message, 'error');
+            }
+        }
+
+        async function connectService(serviceName) {
+            // First check if this is an SSE service that's managed by mcp-remote
+            const services = await fetch('/api/user/services').then(r => r.json());
+            const service = services.find(s => s.service_name === serviceName);
+            
+            if (service && service.auth_type === 'mcp_remote_managed') {
+                showMessage(`${serviceName} uses mcp-remote for authentication. The first time you use it through the agent, you'll be prompted to authenticate in your browser.`, 'success');
+                return;
+            }
+            
+            // Handle other auth types
+            if (service && service.auth_type === 'pat') {
+                const token = prompt(`Please enter your Personal Access Token for ${serviceName}:`);
+                if (token) {
+                    await fetch(`/api/connectors/${serviceName}/token`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ token: token })
+                    });
+                    await renderStatusUI();
+                }
+            } else if (service && service.auth_type === 'oauth2.1') {
+                // Redirect to OAuth flow
+                window.location.href = `/api/connectors/${serviceName}/oauth`;
+            }
+        }
+
+        async function disconnectService(serviceName) {
+            if (!confirm(`Are you sure you want to disconnect ${serviceName}?`)) return;
+            
+            try {
+                const response = await fetch(`/api/connectors/${serviceName}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) throw new Error('Failed to disconnect service');
+                
+                showMessage('Service disconnected successfully!', 'success');
+                await renderStatusUI();
+            } catch (error) {
+                showMessage('Error disconnecting service: ' + error.message, 'error');
+            }
+        }
+
+        function showMessage(text, type) {
+            const messageArea = document.getElementById('message-area');
+            messageArea.textContent = text;
+            messageArea.className = `message ${type}`;
+            messageArea.style.display = 'block';
+            setTimeout(() => { messageArea.style.display = 'none'; }, 5000);
+        }
 
         async function checkAuth() {
             try {

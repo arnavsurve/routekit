@@ -84,10 +84,20 @@ CREATE TABLE IF NOT EXISTS oauth_sessions (
 	log.Println("OAuth sessions table is ready.")
 
 	_, err = conn.Exec(context.Background(), `
-CREATE TABLE IF NOT EXISTS user_service_configs (
-	user_id UUID PRIMARY KEY,
-	config_yaml TEXT NOT NULL,
+DROP TABLE IF EXISTS user_service_configs CASCADE;
+CREATE TABLE user_service_configs (
+	id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+	user_id UUID NOT NULL,
+	service_name TEXT NOT NULL,
+	transport_type TEXT NOT NULL CHECK (transport_type IN ('streamable-http', 'sse')),
+	mcp_server_url TEXT NOT NULL,
+	auth_type TEXT NOT NULL CHECK (auth_type IN ('pat', 'oauth2.1', 'mcp_remote_managed')),
+	auth_config_encrypted BYTEA NOT NULL,
+	scopes JSONB, -- Optional scopes for OAuth2.1
+	audience TEXT, -- Optional audience for OAuth2.1
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	UNIQUE(user_id, mcp_server_url),
 	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 	`)

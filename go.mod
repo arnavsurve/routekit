@@ -9,11 +9,11 @@ require (
 	github.com/jackc/pgx/v5 v5.7.5
 	github.com/joho/godotenv v1.5.1
 	github.com/labstack/echo/v4 v4.13.4
+	github.com/lib/pq v1.10.9
 	github.com/mark3labs/mcp-go v0.32.0
 	github.com/pgvector/pgvector-go v0.3.0
 	github.com/sashabaranov/go-openai v1.40.3
 	golang.org/x/crypto v0.38.0
-	gopkg.in/yaml.v2 v2.4.0
 )
 
 require (

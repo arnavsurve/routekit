@@ -61,7 +61,8 @@ func main() {
 
 	// User service configuration routes
 	api.GET("/user/services", servicesHandler.HandleGetUserServices)
-	api.POST("/user/services", servicesHandler.HandleUpdateUserServices)
+	api.POST("/user/services", servicesHandler.HandleCreateUserService)
+	api.DELETE("/user/services/:id", servicesHandler.HandleDeleteUserService)
 
 	// Generic Connector routes
 	api.POST("/connectors/:service/token", servicesHandler.HandleTokenConnect) // For PAT/API Key
