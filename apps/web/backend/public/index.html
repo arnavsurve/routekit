@@ -210,7 +210,13 @@
 
                         // Check if it's our special auth trigger message.
                         if (errorContent.action_required === 'user_authentication') {
-                            appendAuthRequiredMessage(errorContent.service_name, errorContent.authorization_url);
+                            if (errorContent.authorization_url) {
+                                // OAuth flow
+                                appendAuthRequiredMessage(errorContent.service_name, errorContent.authorization_url);
+                            } else {
+                                // PAT/Token flow
+                                appendTokenRequiredMessage(errorContent.service_name);
+                            }
                         } else {
                             // It's a structured error, but not for auth, display normally.
                             appendToolResult(data.content.name, data.content.result, true);
@@ -326,6 +332,74 @@
 
             item.appendChild(p);
             item.appendChild(button);
+            item.appendChild(info);
+            
+            messages.appendChild(item);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function appendTokenRequiredMessage(serviceName) {
+            const item = document.createElement('div');
+            item.className = 'system-error';
+
+            const p = document.createElement('p');
+            p.innerHTML = `The connection to <b>${serviceName}</b> requires a Personal Access Token. Please enter your token below.`;
+
+            const form = document.createElement('form');
+            form.style.marginTop = '15px';
+            
+            const tokenInput = document.createElement('input');
+            tokenInput.type = 'password';
+            tokenInput.placeholder = 'Enter your Personal Access Token';
+            tokenInput.style.width = '300px';
+            tokenInput.style.padding = '8px';
+            tokenInput.style.marginRight = '10px';
+            tokenInput.style.border = '1px solid #ccc';
+            tokenInput.style.borderRadius = '4px';
+
+            const submitButton = document.createElement('button');
+            submitButton.type = 'submit';
+            submitButton.className = 'auth-button';
+            submitButton.textContent = 'Connect';
+            submitButton.style.margin = '0';
+
+            form.appendChild(tokenInput);
+            form.appendChild(submitButton);
+
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const token = tokenInput.value.trim();
+                if (!token) {
+                    alert('Please enter a token');
+                    return;
+                }
+
+                try {
+                    const response = await fetch(`/api/connectors/${serviceName}/token`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ token })
+                    });
+
+                    if (response.ok) {
+                        item.innerHTML = `<p><b>${serviceName}</b> connected successfully! You can now try your request again.</p>`;
+                        item.className = 'tool-result';
+                    } else {
+                        const errorData = await response.json();
+                        throw new Error(errorData.error || 'Failed to connect');
+                    }
+                } catch (error) {
+                    alert('Failed to connect: ' + error.message);
+                }
+            });
+
+            const info = document.createElement('p');
+            info.style.marginTop = '10px';
+            info.style.fontSize = '12px';
+            info.textContent = 'Your token will be encrypted and stored securely.';
+
+            item.appendChild(p);
+            item.appendChild(form);
             item.appendChild(info);
             
             messages.appendChild(item);

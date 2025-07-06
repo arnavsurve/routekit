@@ -339,7 +339,17 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 			if len(credentials) == 0 {
 				return nil, fmt.Errorf(`{"action_required": "user_authentication", "service_name": "%s"}`, service.Name)
 			}
-			opts = append(opts, transport.WithHTTPHeaders(map[string]string{"Authorization": "Bearer " + string(credentials)}))
+			// Parse the credentials JSON to extract the token
+			var creds map[string]interface{}
+			if err := json.Unmarshal(credentials, &creds); err != nil {
+				return nil, fmt.Errorf("failed to parse credentials for %s: %w", service.Name, err)
+			}
+			token, ok := creds["token"].(string)
+			if !ok {
+				return nil, fmt.Errorf("invalid token format for %s", service.Name)
+			}
+			// GitHub MCP endpoint expects "Bearer" prefix for PAT
+			opts = append(opts, transport.WithHTTPHeaders(map[string]string{"Authorization": "Bearer " + token}))
 		case "oauth2.1":
 			return nil, fmt.Errorf("direct oauth2.1 for http transport not yet supported, use stdio with mcp-remote")
 		default:
