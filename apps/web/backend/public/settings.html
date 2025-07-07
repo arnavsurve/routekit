@@ -293,9 +293,9 @@
             <label for="transport-type">Transport Type</label>
             <select id="transport-type" name="transport_type" required>
               <option value="">Select transport type...</option>
-              <option value="streamable-http">Remote - Streamable HTTP</option>
-              <option value="sse">Remote - SSE (via mcp-remote)</option>
-              <option value="local_stdio">Local - Stdio Command</option>
+              <option value="streamable-http">Remote - HTTP</option>
+              <option value="sse">Remote - SSE</option>
+              <option value="local_stdio">Local - Stdio</option>
             </select>
           </div>
 
@@ -318,9 +318,7 @@
                 <option value="api_key_in_header">API Key (in Header)</option>
                 <option value="api_key_in_url">API Key (in URL)</option>
                 <option value="oauth2.1">OAuth 2.1</option>
-                <option value="mcp_remote_managed">
-                  mcp-remote Managed (for SSE)
-                </option>
+                <option value="mcp_remote_managed">Managed (for SSE)</option>
               </select>
             </div>
           </div>
