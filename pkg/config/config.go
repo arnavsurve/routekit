@@ -6,19 +6,16 @@ import (
 )
 
 type ServiceConfig struct {
-	ID              string            `json:"id"`
-	UserID          string            `json:"user_id"`
-	Slug            string            `json:"service_slug"`
-	DisplayName     string            `json:"display_name"`
-	TransportType   string            `json:"transport_type"`
-	MCPServerURL    *string           `json:"mcp_server_url,omitempty"`
-	AuthType        string            `json:"auth_type"`
-	AuthConfig      AuthConfig        `json:"auth_config"`
-	Scopes          []string          `json:"scopes,omitempty"`
-	Audience        *string           `json:"audience,omitempty"`
-	Command         []string          `json:"command,omitempty"`
-	WorkingDir      *string           `json:"working_dir,omitempty"`
-	EnvironmentVars map[string]string `json:"environment_vars,omitempty"`
+	ID            string     `json:"id"`
+	UserID        string     `json:"user_id"`
+	Slug          string     `json:"service_slug"`
+	DisplayName   string     `json:"display_name"`
+	TransportType string     `json:"transport_type"`
+	MCPServerURL  *string    `json:"mcp_server_url,omitempty"`
+	AuthType      string     `json:"auth_type"`
+	AuthConfig    AuthConfig `json:"auth_config"`
+	Scopes        []string   `json:"scopes,omitempty"`
+	Audience      *string    `json:"audience,omitempty"`
 }
 
 type AuthConfig struct {
@@ -42,15 +39,12 @@ func (s *ServiceConfig) GenerateCommand() []string {
 	if s.TransportType == "sse" && s.MCPServerURL != nil {
 		return []string{"npx", "-y", "mcp-remote", *s.MCPServerURL, "--host", "localhost"}
 	}
-	if s.TransportType == "local_stdio" {
-		return s.Command
-	}
 	return nil
 }
 
 // GetTransport returns the effective transport type (stdio for SSE via mcp-remote)
 func (s *ServiceConfig) GetTransport() string {
-	if s.TransportType == "sse" || s.TransportType == "local_stdio" {
+	if s.TransportType == "sse" {
 		return "stdio" // mcp-remote facade
 	}
 	return s.TransportType
@@ -73,9 +67,9 @@ func ValidateServiceConfig(s *ServiceConfig) error {
 		return errors.New("MCP server URL is required for remote transports")
 	}
 
-	validTransports := map[string]bool{"streamable-http": true, "sse": true, "local_stdio": true}
+	validTransports := map[string]bool{"streamable-http": true, "sse": true}
 	if !validTransports[s.TransportType] {
-		return fmt.Errorf("transport type must be one of 'streamable-http', 'sse', or 'local_stdio'")
+		return fmt.Errorf("transport type must be one of 'streamable-http' or 'sse'")
 	}
 
 	validAuthTypes := map[string]bool{
@@ -104,10 +98,5 @@ func ValidateServiceConfig(s *ServiceConfig) error {
 		}
 	}
 
-	if s.TransportType == "local_stdio" {
-		if len(s.Command) == 0 {
-			return errors.New("command is required for local_stdio transport")
-		}
-	}
 	return nil
 }

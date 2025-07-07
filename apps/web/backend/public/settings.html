@@ -295,7 +295,6 @@
               <option value="">Select transport type...</option>
               <option value="streamable-http">Remote - HTTP</option>
               <option value="sse">Remote - SSE</option>
-              <option value="local_stdio">Local - Stdio</option>
             </select>
           </div>
 
@@ -323,43 +322,6 @@
             </div>
           </div>
 
-          <!-- Fields for Local Stdio Transport -->
-          <div id="local-stdio-fields" class="transport-fields">
-            <div class="form-group">
-              <label for="command">Command</label>
-              <input
-                type="text"
-                id="command"
-                name="command"
-                placeholder="e.g., uv run server.py"
-              />
-              <small
-                >Enter the full command and its arguments, separated by
-                spaces.</small
-              >
-            </div>
-            <div class="form-group">
-              <label for="working-dir">Working Directory (optional)</label>
-              <input
-                type="text"
-                id="working-dir"
-                name="working_dir"
-                placeholder="/path/to/your/mcp-server"
-              />
-            </div>
-            <div class="form-group">
-              <label for="environment-vars"
-                >Environment Variables (optional)</label
-              >
-              <textarea
-                id="environment-vars"
-                name="environment_vars"
-                placeholder="KEY1=VALUE1
-KEY2=VALUE2"
-              ></textarea>
-              <small>Enter one key-value pair per line.</small>
-            </div>
-          </div>
 
           <!-- Fields for PAT Auth -->
           <div id="pat-fields" class="auth-fields">
@@ -537,12 +499,6 @@ KEY2=VALUE2"
               document.getElementById("oauth-fields").style.display = "block";
               break;
           }
-        } else if (transportType === "local_stdio") {
-          document.getElementById("local-stdio-fields").style.display = "block";
-          document.getElementById("mcp-server-url").required = false;
-          // For local_stdio, auth is managed by the underlying tool, so we can set to no_auth and disable
-          authSelect.value = "no_auth";
-          authSelect.disabled = true;
         } else {
           authSelect.disabled = false;
           document.getElementById("mcp-server-url").required = true;
@@ -563,21 +519,6 @@ KEY2=VALUE2"
             }
           }
 
-          // Special handling for command array
-          if (serviceData.command) {
-            serviceData.command = serviceData.command.split(" ");
-          }
-          // Special handling for environment vars
-          if (serviceData.environment_vars) {
-            const envMap = {};
-            serviceData.environment_vars.split("\n").forEach((line) => {
-              const parts = line.split("=");
-              if (parts.length === 2 && parts[0].trim()) {
-                envMap[parts[0].trim()] = parts[1].trim();
-              }
-            });
-            serviceData.environment_vars = envMap;
-          }
 
           // Handle the different api_key fields
           if (serviceData.auth_type === "api_key_in_url") {
@@ -585,11 +526,9 @@ KEY2=VALUE2"
             delete serviceData.api_key_url;
           }
 
-          // Set auth_type for sse and local_stdio
+          // Set auth_type for sse
           if (serviceData.transport_type === "sse")
             serviceData.auth_type = "mcp_remote_managed";
-          if (serviceData.transport_type === "local_stdio")
-            serviceData.auth_type = "no_auth";
 
           try {
             const response = await fetch("/api/user/services", {

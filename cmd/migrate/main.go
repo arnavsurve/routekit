@@ -98,7 +98,7 @@ CREATE TABLE user_service_configs (
 	user_id UUID NOT NULL,
 	service_slug TEXT NOT NULL,
     display_name TEXT NOT NULL,
-	transport_type TEXT NOT NULL CHECK (transport_type IN ('streamable-http', 'sse', 'local-stdio')),
+	transport_type TEXT NOT NULL CHECK (transport_type IN ('streamable-http', 'sse')),
 	mcp_server_url TEXT,
 	auth_type TEXT NOT NULL CHECK (
         auth_type IN (
@@ -113,11 +113,6 @@ CREATE TABLE user_service_configs (
 	auth_config_encrypted BYTEA NOT NULL,
 	scopes JSONB,
 	audience TEXT,
-
-    command TEXT[],
-    working_dir TEXT,
-    environment_vars JSONB,
-
 	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	UNIQUE(user_id, service_slug),

@@ -125,7 +125,7 @@ func (gw *GatewayServer) mcpAuthMiddleware(next server.ToolHandlerFunc) server.T
 func (gw *GatewayServer) getUserServiceConfigs(ctx context.Context, userID string) ([]config.ServiceConfig, error) {
 	rows, err := gw.db.Query(ctx, `
 		SELECT id, service_slug, display_name, transport_type, mcp_server_url, auth_type, 
-		       auth_config_encrypted, scopes, audience, command, working_dir, environment_vars
+		       auth_config_encrypted, scopes, audience
 		FROM user_service_configs 
 		WHERE user_id = $1
 	`, userID)
@@ -137,12 +137,11 @@ func (gw *GatewayServer) getUserServiceConfigs(ctx context.Context, userID strin
 	var services []config.ServiceConfig
 	for rows.Next() {
 		var service config.ServiceConfig
-		var authConfigEncrypted, scopesJSON, envVarsJSON []byte
+		var authConfigEncrypted, scopesJSON []byte
 
 		err := rows.Scan(
 			&service.ID, &service.Slug, &service.DisplayName, &service.TransportType, &service.MCPServerURL,
 			&service.AuthType, &authConfigEncrypted, &scopesJSON, &service.Audience,
-			&service.Command, &service.WorkingDir, &envVarsJSON,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan service config: %w", err)
@@ -370,8 +369,6 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 		}
 		return c, nil
 
-	case "local_stdio":
-		return nil, fmt.Errorf("direct local_stdio not yet supported, use sse with mcp_remote_managed")
 
 	default:
 		return nil, fmt.Errorf("unsupported or unhandled transport type: %s", service.TransportType)

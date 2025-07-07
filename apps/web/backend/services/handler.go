@@ -43,10 +43,6 @@ type createServiceRequest struct {
 	Scopes           []string `json:"scopes,omitempty"`
 	Audience         *string  `json:"audience,omitempty"`
 
-	// Local stdio fields
-	Command         []string          `json:"command,omitempty"`
-	WorkingDir      *string           `json:"working_dir,omitempty"`
-	EnvironmentVars map[string]string `json:"environment_vars,omitempty"`
 }
 
 // HandleGetUserServices returns all service configurations for the user
@@ -57,7 +53,7 @@ func (h *ServicesHandler) HandleGetUserServices(c echo.Context) error {
 
 	rows, err := h.DBPool.Query(context.Background(), `
 		SELECT id, service_slug, display_name, transport_type, mcp_server_url, auth_type, 
-		       auth_config_encrypted, scopes, audience, command, working_dir, environment_vars
+		       auth_config_encrypted, scopes, audience
 		FROM user_service_configs 
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -70,12 +66,11 @@ func (h *ServicesHandler) HandleGetUserServices(c echo.Context) error {
 	var services []config.ServiceConfig
 	for rows.Next() {
 		var service config.ServiceConfig
-		var authConfigEncrypted, scopesJSON, envVarsJSON []byte
+		var authConfigEncrypted, scopesJSON []byte
 
 		err := rows.Scan(
 			&service.ID, &service.Slug, &service.DisplayName, &service.TransportType, &service.MCPServerURL,
 			&service.AuthType, &authConfigEncrypted, &scopesJSON, &service.Audience,
-			&service.Command, &service.WorkingDir, &envVarsJSON,
 		)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("Failed to scan service: %v", err)})
@@ -89,13 +84,6 @@ func (h *ServicesHandler) HandleGetUserServices(c echo.Context) error {
 			service.Scopes = []string{}
 		}
 
-		if envVarsJSON != nil {
-			if err := json.Unmarshal(envVarsJSON, &service.EnvironmentVars); err != nil {
-				service.EnvironmentVars = make(map[string]string)
-			}
-		} else {
-			service.EnvironmentVars = make(map[string]string)
-		}
 
 		authConfigJSON, err := crypto.Decrypt(authConfigEncrypted)
 		if err != nil {
@@ -129,17 +117,14 @@ func (h *ServicesHandler) HandleCreateUserService(c echo.Context) error {
 	slug = strings.Trim(slug, "-")
 
 	service := config.ServiceConfig{
-		UserID:          userID,
-		Slug:            slug,
-		DisplayName:     req.DisplayName,
-		TransportType:   req.TransportType,
-		MCPServerURL:    req.MCPServerURL,
-		AuthType:        req.AuthType,
-		Scopes:          req.Scopes,
-		Audience:        req.Audience,
-		Command:         req.Command,
-		WorkingDir:      req.WorkingDir,
-		EnvironmentVars: req.EnvironmentVars,
+		UserID:        userID,
+		Slug:          slug,
+		DisplayName:   req.DisplayName,
+		TransportType: req.TransportType,
+		MCPServerURL:  req.MCPServerURL,
+		AuthType:      req.AuthType,
+		Scopes:        req.Scopes,
+		Audience:      req.Audience,
 		AuthConfig: config.AuthConfig{
 			Type:             req.AuthType,
 			Token:            req.Token,
@@ -155,9 +140,6 @@ func (h *ServicesHandler) HandleCreateUserService(c echo.Context) error {
 
 	if service.Scopes == nil {
 		service.Scopes = []string{}
-	}
-	if service.EnvironmentVars == nil {
-		service.EnvironmentVars = make(map[string]string)
 	}
 
 	if err := config.ValidateServiceConfig(&service); err != nil {
@@ -205,19 +187,15 @@ func (h *ServicesHandler) HandleCreateUserService(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to serialize scopes"})
 	}
 
-	envVarsJSON, err := json.Marshal(service.EnvironmentVars)
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to serialize environment variables"})
-	}
 
 	var serviceID string
 	err = h.DBPool.QueryRow(context.Background(), `
 		INSERT INTO user_service_configs 
-		(user_id, service_slug, display_name, transport_type, mcp_server_url, auth_type, auth_config_encrypted, scopes, audience, command, working_dir, environment_vars)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		(user_id, service_slug, display_name, transport_type, mcp_server_url, auth_type, auth_config_encrypted, scopes, audience)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id
 	`, userID, service.Slug, service.DisplayName, service.TransportType, service.MCPServerURL, service.AuthType,
-		authConfigEncrypted, scopesJSON, service.Audience, service.Command, service.WorkingDir, envVarsJSON).Scan(&serviceID)
+		authConfigEncrypted, scopesJSON, service.Audience).Scan(&serviceID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("Failed to create service: %v", err)})
 	}
@@ -262,17 +240,16 @@ func (h *ServicesHandler) HandleDeleteUserService(c echo.Context) error {
 // Helper function to get user service config by service name
 func (h *ServicesHandler) getUserServiceConfig(userID, serviceName string) (*config.ServiceConfig, error) {
 	var service config.ServiceConfig
-	var authConfigEncrypted, scopesJSON, envVarsJSON []byte
+	var authConfigEncrypted, scopesJSON []byte
 
 	err := h.DBPool.QueryRow(context.Background(), `
 		SELECT id, service_slug, display_name, transport_type, mcp_server_url, auth_type, 
-		       auth_config_encrypted, scopes, audience, command, working_dir, environment_vars
+		       auth_config_encrypted, scopes, audience
 		FROM user_service_configs 
 		WHERE user_id = $1 AND service_slug = $2
 	`, userID, serviceName).Scan(
 		&service.ID, &service.Slug, &service.DisplayName, &service.TransportType, &service.MCPServerURL,
 		&service.AuthType, &authConfigEncrypted, &scopesJSON, &service.Audience,
-		&service.Command, &service.WorkingDir, &envVarsJSON,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -289,13 +266,6 @@ func (h *ServicesHandler) getUserServiceConfig(userID, serviceName string) (*con
 		service.Scopes = []string{}
 	}
 
-	if envVarsJSON != nil {
-		if err := json.Unmarshal(envVarsJSON, &service.EnvironmentVars); err != nil {
-			service.EnvironmentVars = make(map[string]string)
-		}
-	} else {
-		service.EnvironmentVars = make(map[string]string)
-	}
 
 	authConfigJSON, err := crypto.Decrypt(authConfigEncrypted)
 	if err != nil {

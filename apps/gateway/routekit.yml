@@ -7,16 +7,16 @@ services:
       type: pat
   
   - name: atlassian
-    transport: stdio
-    command: ["npx", "-y", "mcp-remote", "https://mcp.atlassian.com/v1/sse", "--host", "localhost"]
+    transport: sse
+    url: https://mcp.atlassian.com/v1/sse
     auth:
-      type: oauth2.1
+      type: mcp_remote_managed
 
   - name: linear
-    transport: stdio
-    command: ["npx", "-y", "mcp-remote", "https://mcp.linear.app/sse", "--host", "localhost"]
+    transport: sse
+    url: https://mcp.linear.app/sse
     auth:
-      type: oauth2.1
+      type: mcp_remote_managed
 
   # EXAMPLE of how a user could add their own internal service
   # - name: my-internal-api
