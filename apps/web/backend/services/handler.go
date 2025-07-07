@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/arnavsurve/routekit/apps/web/backend/auth"
@@ -25,7 +26,7 @@ type ServicesHandler struct {
 }
 
 type createServiceRequest struct {
-	ServiceName   string  `json:"service_name"`
+	DisplayName   string  `json:"display_name"`
 	TransportType string  `json:"transport_type"`
 	MCPServerURL  *string `json:"mcp_server_url,omitempty"`
 	AuthType      string  `json:"auth_type"`
@@ -55,7 +56,7 @@ func (h *ServicesHandler) HandleGetUserServices(c echo.Context) error {
 	userID := claims.UserID
 
 	rows, err := h.DBPool.Query(context.Background(), `
-		SELECT id, service_name, transport_type, mcp_server_url, auth_type, 
+		SELECT id, service_slug, display_name, transport_type, mcp_server_url, auth_type, 
 		       auth_config_encrypted, scopes, audience, command, working_dir, environment_vars
 		FROM user_service_configs 
 		WHERE user_id = $1
@@ -72,7 +73,7 @@ func (h *ServicesHandler) HandleGetUserServices(c echo.Context) error {
 		var authConfigEncrypted, scopesJSON, envVarsJSON []byte
 
 		err := rows.Scan(
-			&service.ID, &service.Name, &service.TransportType, &service.MCPServerURL,
+			&service.ID, &service.Slug, &service.DisplayName, &service.TransportType, &service.MCPServerURL,
 			&service.AuthType, &authConfigEncrypted, &scopesJSON, &service.Audience,
 			&service.Command, &service.WorkingDir, &envVarsJSON,
 		)
@@ -123,9 +124,14 @@ func (h *ServicesHandler) HandleCreateUserService(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
+	slug := strings.ToLower(req.DisplayName)
+	slug = regexp.MustCompile(`[^a-z0-9-]+`).ReplaceAllString(slug, "-")
+	slug = strings.Trim(slug, "-")
+
 	service := config.ServiceConfig{
 		UserID:          userID,
-		Name:            req.ServiceName,
+		Slug:            slug,
+		DisplayName:     req.DisplayName,
 		TransportType:   req.TransportType,
 		MCPServerURL:    req.MCPServerURL,
 		AuthType:        req.AuthType,
@@ -173,6 +179,17 @@ func (h *ServicesHandler) HandleCreateUserService(c echo.Context) error {
 		}
 	}
 
+	var exists bool
+	err := h.DBPool.QueryRow(context.Background(),
+		"SELECT EXISTS(SELECT 1 FROM user_service_configs WHERE user_id = $1 AND service_slug = $2)",
+		userID, service.Slug).Scan(&exists)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Database duplicate service check failed"})
+	}
+	if exists {
+		return c.JSON(http.StatusConflict, map[string]string{"error": "A service with this name already exists"})
+	}
+
 	authConfigJSON, err := json.Marshal(service.AuthConfig)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to serialize auth config"})
@@ -196,10 +213,10 @@ func (h *ServicesHandler) HandleCreateUserService(c echo.Context) error {
 	var serviceID string
 	err = h.DBPool.QueryRow(context.Background(), `
 		INSERT INTO user_service_configs 
-		(user_id, service_name, transport_type, mcp_server_url, auth_type, auth_config_encrypted, scopes, audience, command, working_dir, environment_vars)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		(user_id, service_slug, display_name, transport_type, mcp_server_url, auth_type, auth_config_encrypted, scopes, audience, command, working_dir, environment_vars)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id
-	`, userID, service.Name, service.TransportType, service.MCPServerURL, service.AuthType,
+	`, userID, service.Slug, service.DisplayName, service.TransportType, service.MCPServerURL, service.AuthType,
 		authConfigEncrypted, scopesJSON, service.Audience, service.Command, service.WorkingDir, envVarsJSON).Scan(&serviceID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("Failed to create service: %v", err)})
@@ -216,8 +233,8 @@ func (h *ServicesHandler) HandleDeleteUserService(c echo.Context) error {
 	userID := claims.UserID
 	serviceID := c.Param("id")
 
-	var serviceName string
-	err := h.DBPool.QueryRow(context.Background(), "SELECT service_name FROM user_service_configs WHERE id = $1 AND user_id = $2", serviceID, userID).Scan(&serviceName)
+	var serviceSlug string
+	err := h.DBPool.QueryRow(context.Background(), "SELECT service_slug FROM user_service_configs WHERE id = $1 AND user_id = $2", serviceID, userID).Scan(&serviceSlug)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return c.JSON(http.StatusNotFound, map[string]string{"error": "Service not found"})
@@ -237,7 +254,7 @@ func (h *ServicesHandler) HandleDeleteUserService(c echo.Context) error {
 
 	_, _ = h.DBPool.Exec(context.Background(),
 		"DELETE FROM connected_services WHERE user_id = $1 AND service_name = $2",
-		userID, serviceName)
+		userID, serviceSlug)
 
 	return c.JSON(http.StatusOK, map[string]bool{"success": true})
 }
@@ -248,12 +265,12 @@ func (h *ServicesHandler) getUserServiceConfig(userID, serviceName string) (*con
 	var authConfigEncrypted, scopesJSON, envVarsJSON []byte
 
 	err := h.DBPool.QueryRow(context.Background(), `
-		SELECT id, service_name, transport_type, mcp_server_url, auth_type, 
+		SELECT id, service_slug, display_name, transport_type, mcp_server_url, auth_type, 
 		       auth_config_encrypted, scopes, audience, command, working_dir, environment_vars
 		FROM user_service_configs 
-		WHERE user_id = $1 AND service_name = $2
+		WHERE user_id = $1 AND service_slug = $2
 	`, userID, serviceName).Scan(
-		&service.ID, &service.Name, &service.TransportType, &service.MCPServerURL,
+		&service.ID, &service.Slug, &service.DisplayName, &service.TransportType, &service.MCPServerURL,
 		&service.AuthType, &authConfigEncrypted, &scopesJSON, &service.Audience,
 		&service.Command, &service.WorkingDir, &envVarsJSON,
 	)
@@ -298,9 +315,9 @@ func (h *ServicesHandler) HandleOAuthConnect(c echo.Context) error {
 	user := c.Get("user").(*jwt.Token)
 	claims := user.Claims.(*auth.Claims)
 	userID := claims.UserID
-	serviceName := c.Param("service")
+	serviceSlug := c.Param("service")
 
-	serviceConfig, err := h.getUserServiceConfig(userID, serviceName)
+	serviceConfig, err := h.getUserServiceConfig(userID, serviceSlug)
 	if err != nil {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
 	}
@@ -323,7 +340,7 @@ func (h *ServicesHandler) HandleOAuthConnect(c echo.Context) error {
 	// Store state to validate the callback
 	_, err = h.DBPool.Exec(context.Background(),
 		"INSERT INTO oauth_sessions (state, user_id, service_name, code_verifier) VALUES ($1, $2, $3, $4)",
-		state, userID, serviceName, "")
+		state, userID, serviceSlug, "")
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to initiate auth session"})
 	}
@@ -350,7 +367,7 @@ func (h *ServicesHandler) HandleTokenConnect(c echo.Context) error {
 	user := c.Get("user").(*jwt.Token)
 	claims := user.Claims.(*auth.Claims)
 	userID := claims.UserID
-	serviceName := c.Param("service")
+	serviceSlug := c.Param("service")
 
 	var req struct {
 		Token string `json:"token"`
@@ -359,7 +376,7 @@ func (h *ServicesHandler) HandleTokenConnect(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	serviceConfig, err := h.getUserServiceConfig(userID, serviceName)
+	serviceConfig, err := h.getUserServiceConfig(userID, serviceSlug)
 	if err != nil {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
 	}
@@ -383,7 +400,7 @@ func (h *ServicesHandler) HandleTokenConnect(c echo.Context) error {
 		VALUES ($1, $2, $3)
 		ON CONFLICT (user_id, service_name) 
 		DO UPDATE SET credentials_encrypted = EXCLUDED.credentials_encrypted
-	`, userID, serviceName, credentialsEncrypted)
+	`, userID, serviceSlug, credentialsEncrypted)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to store credentials"})
 	}
@@ -401,9 +418,9 @@ func (h *ServicesHandler) HandleCallback(c echo.Context) error {
 	}
 
 	// Get session info
-	var userID, serviceName string
+	var userID, serviceSlug string
 	err := h.DBPool.QueryRow(context.Background(),
-		"SELECT user_id, service_name FROM oauth_sessions WHERE state = $1", state).Scan(&userID, &serviceName)
+		"SELECT user_id, service_name FROM oauth_sessions WHERE state = $1", state).Scan(&userID, &serviceSlug)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid or expired state"})
 	}
@@ -411,7 +428,7 @@ func (h *ServicesHandler) HandleCallback(c echo.Context) error {
 	// Delete the session
 	_, _ = h.DBPool.Exec(context.Background(), "DELETE FROM oauth_sessions WHERE state = $1", state)
 
-	serviceConfig, err := h.getUserServiceConfig(userID, serviceName)
+	serviceConfig, err := h.getUserServiceConfig(userID, serviceSlug)
 	if err != nil {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
 	}
@@ -433,7 +450,7 @@ func (h *ServicesHandler) HandleCallback(c echo.Context) error {
 		VALUES ($1, $2, $3)
 		ON CONFLICT (user_id, service_name) 
 		DO UPDATE SET credentials_encrypted = EXCLUDED.credentials_encrypted
-	`, userID, serviceName, credentialsEncrypted)
+	`, userID, serviceSlug, credentialsEncrypted)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to store credentials"})
 	}
@@ -480,11 +497,11 @@ func (h *ServicesHandler) HandleDisconnect(c echo.Context) error {
 	user := c.Get("user").(*jwt.Token)
 	claims := user.Claims.(*auth.Claims)
 	userID := claims.UserID
-	serviceName := c.Param("service")
+	serviceSlug := c.Param("service")
 
 	_, err := h.DBPool.Exec(context.Background(),
 		"DELETE FROM connected_services WHERE user_id = $1 AND service_name = $2",
-		userID, serviceName)
+		userID, serviceSlug)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to disconnect"})
 	}
@@ -504,7 +521,7 @@ func (h *ServicesHandler) HandleGetAllStatuses(c echo.Context) error {
 	}
 
 	// Get manually connected services (PAT/OAuth2.1)
-	connectedRows, err := h.DBPool.Query(context.Background(), "SELECT service_name FROM connected_services WHERE user_id = $1", userID)
+	connectedRows, err := h.DBPool.Query(context.Background(), "SELECT service_slug FROM user_service_configs WHERE user_id = $1", userID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "db error"})
 	}
@@ -512,28 +529,25 @@ func (h *ServicesHandler) HandleGetAllStatuses(c echo.Context) error {
 
 	servicesWithCreds := make(map[string]bool)
 	for connectedRows.Next() {
-		var name string
-		if err := connectedRows.Scan(&name); err != nil {
+		var slug string
+		if err := connectedRows.Scan(&slug); err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "db scan error for connected services"})
 		}
-		servicesWithCreds[name] = true
+		servicesWithCreds[slug] = true
 	}
 
 	// Build status for all services
 	statuses := make(map[string]any)
 	for _, service := range services {
 		var isConnected bool
-
 		switch service.AuthType {
 		case "mcp_remote_managed", "no_auth":
 			isConnected = true
-		case "pat", "api_key_in_header", "api_key_in_url", "oauth2.1":
-			isConnected = servicesWithCreds[service.Name]
 		default:
-			isConnected = false
+			isConnected = servicesWithCreds[service.Slug]
 		}
 
-		statuses[service.Name] = map[string]any{
+		statuses[service.DisplayName] = map[string]any{
 			"connected": isConnected,
 			"type":      service.AuthType,
 		}
@@ -545,7 +559,7 @@ func (h *ServicesHandler) HandleGetAllStatuses(c echo.Context) error {
 // Helper to get all user services without decryption
 func (h *ServicesHandler) getAllUserServices(userID string) ([]config.ServiceConfig, error) {
 	rows, err := h.DBPool.Query(context.Background(), `
-		SELECT service_name, auth_type
+		SELECT service_slug, display_name, auth_type
 		FROM user_service_configs 
 		WHERE user_id = $1
 	`, userID)
@@ -557,7 +571,7 @@ func (h *ServicesHandler) getAllUserServices(userID string) ([]config.ServiceCon
 	var services []config.ServiceConfig
 	for rows.Next() {
 		var service config.ServiceConfig
-		err := rows.Scan(&service.Name, &service.AuthType)
+		err := rows.Scan(&service.Slug, &service.DisplayName, &service.AuthType)
 		if err != nil {
 			return nil, err
 		}

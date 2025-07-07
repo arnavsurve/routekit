@@ -8,7 +8,8 @@ import (
 type ServiceConfig struct {
 	ID              string            `json:"id"`
 	UserID          string            `json:"user_id"`
-	Name            string            `json:"service_name"`
+	Slug            string            `json:"service_slug"`
+	DisplayName     string            `json:"display_name"`
 	TransportType   string            `json:"transport_type"`
 	MCPServerURL    *string           `json:"mcp_server_url,omitempty"`
 	AuthType        string            `json:"auth_type"`
@@ -64,7 +65,7 @@ func (s *ServiceConfig) GetURL() string {
 }
 
 func ValidateServiceConfig(s *ServiceConfig) error {
-	if s.Name == "" {
+	if s.DisplayName == "" {
 		return errors.New("service name is required")
 	}
 
@@ -110,4 +111,3 @@ func ValidateServiceConfig(s *ServiceConfig) error {
 	}
 	return nil
 }
-

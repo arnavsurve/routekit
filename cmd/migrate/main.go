@@ -96,7 +96,8 @@ DROP TABLE IF EXISTS user_service_configs CASCADE;
 CREATE TABLE user_service_configs (
 	id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 	user_id UUID NOT NULL,
-	service_name TEXT NOT NULL,
+	service_slug TEXT NOT NULL,
+    display_name TEXT NOT NULL,
 	transport_type TEXT NOT NULL CHECK (transport_type IN ('streamable-http', 'sse', 'local-stdio')),
 	mcp_server_url TEXT,
 	auth_type TEXT NOT NULL CHECK (
@@ -119,7 +120,7 @@ CREATE TABLE user_service_configs (
 
 	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-	UNIQUE(user_id, service_name),
+	UNIQUE(user_id, service_slug),
 	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 	`)

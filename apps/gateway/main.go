@@ -19,7 +19,6 @@ import (
 	"github.com/arnavsurve/routekit/pkg/crypto"
 	"github.com/arnavsurve/routekit/pkg/db"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/mark3labs/mcp-go/client"
@@ -125,7 +124,7 @@ func (gw *GatewayServer) mcpAuthMiddleware(next server.ToolHandlerFunc) server.T
 
 func (gw *GatewayServer) getUserServiceConfigs(ctx context.Context, userID string) ([]config.ServiceConfig, error) {
 	rows, err := gw.db.Query(ctx, `
-		SELECT id, service_name, transport_type, mcp_server_url, auth_type, 
+		SELECT id, service_slug, display_name, transport_type, mcp_server_url, auth_type, 
 		       auth_config_encrypted, scopes, audience, command, working_dir, environment_vars
 		FROM user_service_configs 
 		WHERE user_id = $1
@@ -141,7 +140,7 @@ func (gw *GatewayServer) getUserServiceConfigs(ctx context.Context, userID strin
 		var authConfigEncrypted, scopesJSON, envVarsJSON []byte
 
 		err := rows.Scan(
-			&service.ID, &service.Name, &service.TransportType, &service.MCPServerURL,
+			&service.ID, &service.Slug, &service.DisplayName, &service.TransportType, &service.MCPServerURL,
 			&service.AuthType, &authConfigEncrypted, &scopesJSON, &service.Audience,
 			&service.Command, &service.WorkingDir, &envVarsJSON,
 		)
@@ -178,7 +177,7 @@ func (gw *GatewayServer) getUserServiceConfigs(ctx context.Context, userID strin
 }
 
 func (gw *GatewayServer) getOrCreateClient(ctx context.Context, userID string, service config.ServiceConfig) (*client.Client, error) {
-	cacheKey := userID + ":" + service.Name
+	cacheKey := userID + ":" + service.Slug
 
 	// Check cache for an existing, healthy client
 	if cachedClient, ok := gw.clientCache.Load(cacheKey); ok {
@@ -222,17 +221,17 @@ func (gw *GatewayServer) getOrCreateClient(ctx context.Context, userID string, s
 // createClientForService is the heart of the gateway's dynamic connection logic.
 // It instantiates the correct MCP client based on the service's configuration.
 func (gw *GatewayServer) createClientForService(ctx context.Context, userID string, service config.ServiceConfig) (*client.Client, error) {
-	log.Printf("Gateway: Creating client for service %q (transport: %s, auth: %s)", service.Name, service.TransportType, service.AuthType)
+	log.Printf("Gateway: Creating client for service %q (transport: %s, auth: %s)", service.DisplayName, service.TransportType, service.AuthType)
 
 	if service.TransportType == "sse" && service.AuthType == "mcp_remote_managed" {
-		log.Printf("Gateway: Handling mcp_remote_managed service %s via stdio", service.Name)
+		log.Printf("Gateway: Handling mcp_remote_managed service %s via stdio", service.DisplayName)
 
 		command := service.GenerateCommand()
 		if len(command) == 0 {
-			return nil, fmt.Errorf("command generation failed for SSE service %s", service.Name)
+			return nil, fmt.Errorf("command generation failed for SSE service %s", service.DisplayName)
 		}
 
-		configDir := fmt.Sprintf("/tmp/routekit_auth/user_%s_service_%s", userID, service.Name)
+		configDir := fmt.Sprintf("/tmp/routekit_auth/user_%s_service_%s", userID, service.DisplayName)
 		if err := os.MkdirAll(configDir, 0755); err != nil {
 			return nil, fmt.Errorf("failed to create auth config dir for mcp-remote: %w", err)
 		}
@@ -252,7 +251,7 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 		stderr, ok := client.GetStderr(c)
 		if !ok {
 			c.Close()
-			return nil, fmt.Errorf("failed to get stderr from mcp-remote process for %s", service.Name)
+			return nil, fmt.Errorf("failed to get stderr from mcp-remote process for %s", service.DisplayName)
 		}
 
 		go func() {
@@ -260,7 +259,7 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 			re := regexp.MustCompile(`Please authorize this client by visiting: (https?://\S+)`)
 			for scanner.Scan() {
 				line := scanner.Text()
-				log.Printf("Gateway: [mcp-remote stderr (%s)] %s", service.Name, line)
+				log.Printf("Gateway: [mcp-remote stderr (%s)] %s", service.DisplayName, line)
 				matches := re.FindStringSubmatch(line)
 				if len(matches) > 1 {
 					authURLChan <- matches[1]
@@ -269,7 +268,7 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 				}
 			}
 			if err := scanner.Err(); err != nil {
-				errChan <- fmt.Errorf("failed to scan stderr from mcp-remote for %s: %w", service.Name, err)
+				errChan <- fmt.Errorf("failed to scan stderr from mcp-remote for %s: %w", service.DisplayName, err)
 			}
 		}()
 
@@ -292,38 +291,38 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 				<-initDone // Wait for the init to finish to get the error
 				if initErr != nil {
 					c.Close()
-					return nil, fmt.Errorf("stdio client for %s failed to initialize: %w", service.Name, initErr)
+					return nil, fmt.Errorf("stdio client for %s failed to initialize: %w", service.DisplayName, initErr)
 				}
 				return nil, fmt.Errorf("mcp-remote process exited without providing an auth URL or initializing")
 			}
-			log.Printf("Gateway: Intercepted auth URL for %s: %s", service.Name, authURL)
+			log.Printf("Gateway: Intercepted auth URL for %s: %s", service.DisplayName, authURL)
 			c.Close()
 			jsonResponse := fmt.Sprintf(
 				`{"action_required": "user_authentication", "service_name": "%s", "authorization_url": "%s"}`,
-				service.Name,
+				service.DisplayName,
 				authURL,
 			)
 			return nil, errors.New(jsonResponse)
 		case <-initDone:
 			if initErr != nil {
 				c.Close()
-				return nil, fmt.Errorf("failed to initialize stdio client for %s: %w", service.Name, initErr)
+				return nil, fmt.Errorf("failed to initialize stdio client for %s: %w", service.DisplayName, initErr)
 			}
-			log.Printf("Gateway: Successfully initialized stdio client for %s via mcp-remote.", service.Name)
+			log.Printf("Gateway: Successfully initialized stdio client for %s via mcp-remote.", service.DisplayName)
 			return c, nil
 		case err := <-errChan:
 			c.Close()
 			return nil, err
 		case <-initCtx.Done():
 			c.Close()
-			return nil, fmt.Errorf("timeout waiting for stdio client initialization for %s", service.Name)
+			return nil, fmt.Errorf("timeout waiting for stdio client initialization for %s", service.DisplayName)
 		}
 	}
 
 	switch service.TransportType {
 	case "streamable-http":
 		if service.MCPServerURL == nil || *service.MCPServerURL == "" {
-			return nil, fmt.Errorf("missing mcp_server_url for remote service %s", service.Name)
+			return nil, fmt.Errorf("missing mcp_server_url for remote service %s", service.DisplayName)
 		}
 		urlToConnect := *service.MCPServerURL
 		headers := make(map[string]string)
@@ -332,7 +331,7 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 		switch service.AuthType {
 		case "pat":
 			if authConfig.Token == "" {
-				return nil, fmt.Errorf(`{"action_required": "user_authentication", "service_name": "%s", "auth_type": "pat"}`, service.Name)
+				return nil, fmt.Errorf(`{"action_required": "user_authentication", "service_name": "%s", "auth_type": "pat"}`, service.DisplayName)
 			}
 			headers["Authorization"] = "Bearer " + authConfig.Token
 		case "api_key_in_header":
@@ -346,12 +345,12 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 		case "no_auth":
 			// No headers needed
 		default:
-			return nil, fmt.Errorf("unsupported auth type %q for remote service %s", service.AuthType, service.Name)
+			return nil, fmt.Errorf("unsupported auth type %q for remote service %s", service.AuthType, service.DisplayName)
 		}
 
 		c, err := client.NewStreamableHttpClient(urlToConnect, transport.WithHTTPHeaders(headers))
 		if err != nil {
-			return nil, fmt.Errorf("failed to create http client for %s: %w", service.Name, err)
+			return nil, fmt.Errorf("failed to create http client for %s: %w", service.DisplayName, err)
 		}
 
 		// Initialize the remote client
@@ -359,7 +358,7 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 		defer cancel()
 		if needsStart(c) {
 			if startErr := c.Start(initCtx); startErr != nil {
-				return nil, fmt.Errorf("failed to start client transport for %s: %w", service.Name, startErr)
+				return nil, fmt.Errorf("failed to start client transport for %s: %w", service.DisplayName, startErr)
 			}
 		}
 		_, initErr := c.Initialize(initCtx, mcp.InitializeRequest{
@@ -367,7 +366,7 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 		})
 		if initErr != nil {
 			c.Close()
-			return nil, fmt.Errorf("failed to initialize MCP session with %s: %w", service.Name, initErr)
+			return nil, fmt.Errorf("failed to initialize MCP session with %s: %w", service.DisplayName, initErr)
 		}
 		return c, nil
 
@@ -377,25 +376,6 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 	default:
 		return nil, fmt.Errorf("unsupported or unhandled transport type: %s", service.TransportType)
 	}
-}
-
-func (gw *GatewayServer) getCredentialsForService(ctx context.Context, userID string, serviceName string) ([]byte, error) {
-	var encryptedCreds []byte
-	err := gw.db.QueryRow(ctx, "SELECT credentials_encrypted FROM connected_services WHERE user_id = $1 AND service_name = $2", userID, serviceName).Scan(&encryptedCreds)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, fmt.Errorf(`{"action_required": "user_authentication", "service_name": "%s"}`, serviceName)
-		}
-		return nil, fmt.Errorf("database error fetching credentials for %s: %w", serviceName, err)
-	}
-
-	if len(encryptedCreds) == 0 {
-		// This can happen for services like Linear/Atlassian where the connection record
-		// exists but credentials are not stored directly.
-		return nil, nil
-	}
-
-	return crypto.Decrypt(encryptedCreds)
 }
 
 func (gw *GatewayServer) handleGetConnectedServices(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -410,12 +390,17 @@ func (gw *GatewayServer) handleGetConnectedServices(ctx context.Context, req mcp
 		return mcp.NewToolResultError("database error"), nil
 	}
 
-	var serviceNames []string
-	for _, cfg := range configs {
-		serviceNames = append(serviceNames, cfg.Name)
+	type serviceInfo struct {
+		Slug        string `json:"service_slug"`
+		DisplayName string `json:"display_name"`
 	}
 
-	result := map[string][]string{"services": serviceNames}
+	var serviceInfos []serviceInfo
+	for _, cfg := range configs {
+		serviceInfos = append(serviceInfos, serviceInfo{Slug: cfg.Slug, DisplayName: cfg.DisplayName})
+	}
+
+	result := map[string][]serviceInfo{"services": serviceInfos}
 	jsonRes, _ := json.Marshal(result)
 
 	return mcp.NewToolResultText(string(jsonRes)), nil
@@ -446,7 +431,7 @@ func (gw *GatewayServer) handleGetServiceTools(ctx context.Context, req mcp.Call
 	var targetServices []config.ServiceConfig
 	configMap := make(map[string]config.ServiceConfig)
 	for _, cfg := range allUserConfigs {
-		configMap[cfg.Name] = cfg
+		configMap[cfg.Slug] = cfg
 	}
 
 	for _, serviceName := range services {
@@ -497,14 +482,14 @@ func (gw *GatewayServer) discoverUserTools(ctx context.Context, userID string, s
 					errChan <- err
 					return
 				}
-				log.Printf("Gateway: Failed to create client for %s during discovery: %v", s.Name, err)
+				log.Printf("Gateway: Failed to create client for %s during discovery: %v", s.DisplayName, err)
 				return
 			}
 
 			tools, err := c.ListTools(ctx, mcp.ListToolsRequest{})
 			if err != nil {
-				log.Printf("Gateway: Failed to list tools from %s for user %s: %v", s.Name, userID, err)
-				gw.clientCache.Delete(userID + ":" + s.Name)
+				log.Printf("Gateway: Failed to list tools from %s for user %s: %v", s.DisplayName, userID, err)
+				gw.clientCache.Delete(userID + ":" + s.Slug)
 				if closer, ok := c.GetTransport().(io.Closer); ok {
 					closer.Close()
 				}
@@ -512,7 +497,7 @@ func (gw *GatewayServer) discoverUserTools(ctx context.Context, userID string, s
 			}
 
 			for _, tool := range tools.Tools {
-				tool.Name = fmt.Sprintf("%s__%s", s.Name, tool.Name)
+				tool.Name = fmt.Sprintf("%s__%s", s.Slug, tool.Name)
 				select {
 				case toolChan <- tool:
 				case <-discoverCtx.Done():
@@ -586,7 +571,7 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 	if len(nameParts) != 2 {
 		return mcp.NewToolResultErrorf("invalid tool name format: %s. Expected 'service__tool'", fqn), nil
 	}
-	serviceName := nameParts[0]
+	serviceSlug := nameParts[0]
 	originalToolName := nameParts[1]
 
 	allUserConfigs, err := gw.getUserServiceConfigs(ctx, userID)
@@ -597,7 +582,7 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 	var serviceConfig config.ServiceConfig
 	var found bool
 	for _, cfg := range allUserConfigs {
-		if cfg.Name == serviceName {
+		if cfg.Slug == serviceSlug {
 			serviceConfig = cfg
 			found = true
 			break
@@ -605,8 +590,8 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 	}
 
 	if !found {
-		log.Printf("Gateway: Service %q for tool %q not found in user service config", serviceName, fqn)
-		return mcp.NewToolResultErrorf("Unknown service in tool name: %s", serviceName), nil
+		log.Printf("Gateway: Service %q for tool %q not found in user service config", serviceSlug, fqn)
+		return mcp.NewToolResultErrorf("Unknown service in tool name: %s", serviceSlug), nil
 	}
 
 	downstreamClient, err := gw.getOrCreateClient(ctx, userID, serviceConfig)
@@ -614,7 +599,7 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 		if strings.Contains(err.Error(), "action_required") {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		return mcp.NewToolResultErrorf("failed to create client for %s: %v", serviceName, err), nil
+		return mcp.NewToolResultErrorf("failed to create client for %s: %v", serviceSlug, err), nil
 	}
 
 	downstreamReq := mcp.CallToolRequest{
@@ -624,7 +609,7 @@ func (gw *GatewayServer) handleExecute(ctx context.Context, req mcp.CallToolRequ
 		},
 	}
 
-	log.Printf("Gateway: Forwarding request for tool %q (%s) to downstream service %s...", originalToolName, fqn, serviceName)
+	log.Printf("Gateway: Forwarding request for tool %q (%s) to downstream service %s...", originalToolName, fqn, serviceSlug)
 	return downstreamClient.CallTool(ctx, downstreamReq)
 }
 

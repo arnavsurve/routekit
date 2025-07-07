@@ -284,9 +284,9 @@
             <input
               type="text"
               id="service-name"
-              name="service_name"
+              name="display_name"
               required
-              placeholder="e.g., My GitHub Server"
+              placeholder="GitHub"
             />
           </div>
           <div class="form-group">
@@ -633,7 +633,7 @@ KEY2=VALUE2"
           }
 
           services.forEach((service) => {
-            const status = statuses[service.service_name];
+            const status = statuses[service.display_name];
             const isConnected = status?.connected || false;
             const statusText =
               service.auth_type === "mcp_remote_managed"
@@ -645,7 +645,7 @@ KEY2=VALUE2"
             const serviceHtml = `
                         <div class="service-item">
                             <div class="service-header">
-                                <h3>${service.service_name}</h3>
+                                <h3>${service.display_name}</h3>
                                 <button class="btn btn-danger" onclick="deleteService('${service.id}')">Delete</button>
                             </div>
                             <div class="service-details">
