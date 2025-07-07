@@ -3,14 +3,20 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/joho/godotenv"
 )
 
-const DSN = "postgres://routekit:routekit@localhost:5433/routekit?sslmode=disable"
-
 func main() {
-	conn, err := pgx.Connect(context.Background(), DSN)
+	_ = godotenv.Load()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		log.Fatal("DATABASE_URL environment variable not set.")
+	}
+
+	conn, err := pgx.Connect(context.Background(), dsn)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v\n", err)
 	}
@@ -55,7 +61,8 @@ CREATE TABLE IF NOT EXISTS users (
 	// 	log.Println("Capabilities table is ready.")
 
 	_, err = conn.Exec(context.Background(), `
-CREATE TABLE IF NOT EXISTS connected_services (
+DROP TABLE IF EXISTS connected_services CASCADE;
+CREATE TABLE connected_services (
 	id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 	user_id UUID NOT NULL,
 	service_name TEXT NOT NULL,
@@ -70,7 +77,8 @@ CREATE TABLE IF NOT EXISTS connected_services (
 	log.Println("Connected services table is ready.")
 
 	_, err = conn.Exec(context.Background(), `
-CREATE TABLE IF NOT EXISTS oauth_sessions (
+DROP TABLE IF EXISTS oauth_sessions CASCADE;
+CREATE TABLE oauth_sessions (
 	state TEXT PRIMARY KEY,
 	code_verifier TEXT NOT NULL,
 	user_id UUID NOT NULL,
@@ -89,15 +97,29 @@ CREATE TABLE user_service_configs (
 	id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 	user_id UUID NOT NULL,
 	service_name TEXT NOT NULL,
-	transport_type TEXT NOT NULL CHECK (transport_type IN ('streamable-http', 'sse')),
-	mcp_server_url TEXT NOT NULL,
-	auth_type TEXT NOT NULL CHECK (auth_type IN ('pat', 'oauth2.1', 'mcp_remote_managed')),
+	transport_type TEXT NOT NULL CHECK (transport_type IN ('streamable-http', 'sse', 'local-stdio')),
+	mcp_server_url TEXT,
+	auth_type TEXT NOT NULL CHECK (
+        auth_type IN (
+            'pat',
+            'oauth2.1',
+            'mcp_remote_managed',
+            'api_key_in_header',
+            'api_key_in_url',
+            'no_auth'
+        )
+    ),
 	auth_config_encrypted BYTEA NOT NULL,
-	scopes JSONB, -- Optional scopes for OAuth2.1
-	audience TEXT, -- Optional audience for OAuth2.1
+	scopes JSONB,
+	audience TEXT,
+
+    command TEXT[],
+    working_dir TEXT,
+    environment_vars JSONB,
+
 	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-	UNIQUE(user_id, mcp_server_url),
+	UNIQUE(user_id, service_name),
 	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 	`)

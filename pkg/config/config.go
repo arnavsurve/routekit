@@ -1,41 +1,55 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 )
 
 type ServiceConfig struct {
-	ID            string     `json:"id" db:"id"`
-	UserID        string     `json:"user_id" db:"user_id"`
-	Name          string     `json:"service_name" db:"service_name"`
-	TransportType string     `json:"transport_type" db:"transport_type"`
-	MCPServerURL  string     `json:"mcp_server_url" db:"mcp_server_url"`
-	AuthType      string     `json:"auth_type" db:"auth_type"`
-	AuthConfig    AuthConfig `json:"auth_config"`
-	Scopes        []string   `json:"scopes" db:"scopes"`
-	Audience      string     `json:"audience" db:"audience"`
+	ID              string            `json:"id"`
+	UserID          string            `json:"user_id"`
+	Name            string            `json:"service_name"`
+	TransportType   string            `json:"transport_type"`
+	MCPServerURL    *string           `json:"mcp_server_url,omitempty"`
+	AuthType        string            `json:"auth_type"`
+	AuthConfig      AuthConfig        `json:"auth_config"`
+	Scopes          []string          `json:"scopes,omitempty"`
+	Audience        *string           `json:"audience,omitempty"`
+	Command         []string          `json:"command,omitempty"`
+	WorkingDir      *string           `json:"working_dir,omitempty"`
+	EnvironmentVars map[string]string `json:"environment_vars,omitempty"`
 }
 
 type AuthConfig struct {
-	Type             string `json:"type"`
+	Type string `json:"type"`
+	// For 'pat'
+	Token string `json:"token,omitempty"`
+	// For 'api_key_in_header'
+	HeaderName string `json:"header_name,omitempty"`
+	APIKey     string `json:"api_key,omitempty"`
+	// For 'api_key_in_url'
+	QueryParamName string `json:"query_param_name,omitempty"`
+	// For 'oauth2.1'
 	ClientID         string `json:"client_id,omitempty"`
 	ClientSecret     string `json:"client_secret,omitempty"`
 	AuthorizationURL string `json:"authorization_url,omitempty"`
 	TokenURL         string `json:"token_url,omitempty"`
-	Token            string `json:"token,omitempty"` // For PAT
 }
 
 // GenerateCommand creates the runtime command for SSE services using mcp-remote
 func (s *ServiceConfig) GenerateCommand() []string {
-	if s.TransportType == "sse" {
-		return []string{"npx", "-y", "mcp-remote", s.MCPServerURL, "--host", "localhost"}
+	if s.TransportType == "sse" && s.MCPServerURL != nil {
+		return []string{"npx", "-y", "mcp-remote", *s.MCPServerURL, "--host", "localhost"}
+	}
+	if s.TransportType == "local_stdio" {
+		return s.Command
 	}
 	return nil
 }
 
 // GetTransport returns the effective transport type (stdio for SSE via mcp-remote)
 func (s *ServiceConfig) GetTransport() string {
-	if s.TransportType == "sse" {
+	if s.TransportType == "sse" || s.TransportType == "local_stdio" {
 		return "stdio" // mcp-remote facade
 	}
 	return s.TransportType
@@ -43,32 +57,57 @@ func (s *ServiceConfig) GetTransport() string {
 
 // GetURL returns the URL for streamable-http transports
 func (s *ServiceConfig) GetURL() string {
-	if s.TransportType == "streamable-http" {
-		return s.MCPServerURL
+	if s.TransportType == "streamable-http" && s.MCPServerURL != nil {
+		return *s.MCPServerURL
 	}
 	return ""
 }
 
 func ValidateServiceConfig(s *ServiceConfig) error {
 	if s.Name == "" {
-		return fmt.Errorf("service name is required")
+		return errors.New("service name is required")
 	}
-	if s.MCPServerURL == "" {
-		return fmt.Errorf("MCP server URL is required")
+
+	if (s.TransportType == "streamable-http" || s.TransportType == "sse") && (s.MCPServerURL == nil || *s.MCPServerURL == "") {
+		return errors.New("MCP server URL is required for remote transports")
 	}
-	if s.TransportType != "streamable-http" && s.TransportType != "sse" {
-		return fmt.Errorf("transport type must be 'streamable-http' or 'sse'")
+
+	validTransports := map[string]bool{"streamable-http": true, "sse": true, "local_stdio": true}
+	if !validTransports[s.TransportType] {
+		return fmt.Errorf("transport type must be one of 'streamable-http', 'sse', or 'local_stdio'")
 	}
-	if s.AuthType != "pat" && s.AuthType != "oauth2.1" && s.AuthType != "mcp_remote_managed" {
-		return fmt.Errorf("auth type must be 'pat', 'oauth2.1', or 'mcp_remote_managed'")
+
+	validAuthTypes := map[string]bool{
+		"pat": true, "oauth2.1": true, "mcp_remote_managed": true,
+		"api_key_in_header": true, "api_key_in_url": true, "no_auth": true,
 	}
-	if s.AuthType == "oauth2.1" {
+	if !validAuthTypes[s.AuthType] {
+		return fmt.Errorf("invalid auth type: %s", s.AuthType)
+	}
+
+	switch s.AuthType {
+	case "oauth2.1":
 		if s.AuthConfig.ClientID == "" || s.AuthConfig.ClientSecret == "" {
-			return fmt.Errorf("client_id and client_secret are required for oauth2.1")
+			return errors.New("client_id and client_secret are required for oauth2.1")
 		}
 		if s.AuthConfig.AuthorizationURL == "" || s.AuthConfig.TokenURL == "" {
-			return fmt.Errorf("authorization_url and token_url are required for oauth2.1")
+			return errors.New("authorization_url and token_url are required for oauth2.1")
+		}
+	case "api_key_in_header":
+		if s.AuthConfig.HeaderName == "" || s.AuthConfig.APIKey == "" {
+			return errors.New("header_name and api_key are required for api_key_in_header auth")
+		}
+	case "api_key_in_url":
+		if s.AuthConfig.QueryParamName == "" || s.AuthConfig.APIKey == "" {
+			return errors.New("query_param_name and api_key are required for api_key_in_url auth")
+		}
+	}
+
+	if s.TransportType == "local_stdio" {
+		if len(s.Command) == 0 {
+			return errors.New("command is required for local_stdio transport")
 		}
 	}
 	return nil
 }
+

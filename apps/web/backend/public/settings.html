@@ -1,206 +1,648 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
+  <head>
+    <meta charset="UTF-8" />
     <title>Routekit - Settings</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; color: #333; background-color: #f9fafb; }
-        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-        .nav { background-color: #f8f9fa; padding: 15px 0; border-bottom: 1px solid #eaeaea; }
-        .nav ul { list-style: none; padding: 0; margin: 0; display: flex; }
-        .nav li { margin-left: 20px; }
-        .nav a { text-decoration: none; color: #333; font-weight: 500; }
-        .nav a.active { color: #007bff; border-bottom: 2px solid #007bff; }
-        h1 { margin-bottom: 10px; }
-        p { margin-top: 0; color: #666; }
-        .content-wrapper { display: block; }
-        .services-container { width: 100%; max-width: 800px; margin: 0 auto; }
-        .card { border: 1px solid #eaeaea; border-radius: 8px; padding: 20px; background-color: white; margin-bottom: 20px; }
-        .card-header { margin-bottom: 15px; display: flex; justify-content: between; align-items: center; }
-        .card-header h2 { margin: 0; font-size: 18px; flex: 1; }
-        .btn { display: inline-block; background-color: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; text-decoration: none; text-align: center; }
-        .btn:hover { background-color: #0056b3; }
-        .btn-danger { background-color: #dc3545; }
-        .btn-danger:hover { background-color: #c82333; }
-        .btn-success { background-color: #28a745; }
-        .btn-success:hover { background-color: #218838; }
-        .form-group { margin-bottom: 15px; }
-        .form-group label { display: block; margin-bottom: 5px; font-weight: 500; }
-        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
-        .form-group textarea { height: 80px; resize: vertical; }
-        .form-row { display: flex; gap: 15px; }
-        .form-row .form-group { flex: 1; }
-        .service-item { border: 1px solid #eaeaea; border-radius: 8px; padding: 15px; margin-bottom: 15px; background-color: #fafbfc; }
-        .service-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-        .service-header h3 { margin: 0; font-size: 16px; }
-        .service-details { font-size: 14px; color: #666; }
-        .service-details div { margin-bottom: 5px; }
-        .connector-info { display: flex; justify-content: space-between; align-items: center; padding: 15px 0; border-bottom: 1px solid #eaeaea; }
-        .connector-info:last-child { border-bottom: none; }
-        .status-indicator { width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; display: inline-block; }
-        .status-connected { background-color: #28a745; }
-        .status-disconnected { background-color: #dc3545; }
-        .message { margin-top: 10px; padding: 10px; border-radius: 4px; display: none; }
-        .success { background-color: #d4edda; color: #155724; }
-        .error { background-color: #f8d7da; color: #721c24; }
-        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
-        .modal-content { background-color: white; margin: 5% auto; padding: 20px; border-radius: 8px; width: 90%; max-width: 600px; }
-        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-        .modal-header h2 { margin: 0; }
-        .close { color: #aaa; font-size: 28px; font-weight: bold; cursor: pointer; }
-        .close:hover { color: #000; }
-        .oauth-fields { display: none; }
-        .oauth-fields.show { display: block; }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+          Arial, sans-serif;
+        margin: 0;
+        padding: 0;
+        color: #333;
+        background-color: #f9fafb;
+      }
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .nav {
+        background-color: #f8f9fa;
+        padding: 15px 0;
+        border-bottom: 1px solid #eaeaea;
+      }
+      .nav-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 0 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .nav-brand {
+        font-size: 18px;
+        font-weight: bold;
+        color: #333;
+        text-decoration: none;
+      }
+      .nav ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: flex;
+      }
+      .nav li {
+        margin-left: 20px;
+      }
+      .nav a {
+        text-decoration: none;
+        color: #333;
+        font-weight: 500;
+        padding: 5px 0;
+      }
+      .nav a:hover {
+        color: #007bff;
+      }
+      .nav a.active {
+        color: #007bff;
+        border-bottom: 2px solid #007bff;
+      }
+      h1 {
+        margin-bottom: 10px;
+      }
+      p {
+        margin-top: 0;
+        color: #666;
+      }
+      .content-wrapper {
+        display: block;
+      }
+      .services-container {
+        width: 100%;
+        max-width: 800px;
+        margin: 0 auto;
+      }
+      .card {
+        border: 1px solid #eaeaea;
+        border-radius: 8px;
+        padding: 20px;
+        background-color: white;
+        margin-bottom: 20px;
+      }
+      .card-header {
+        margin-bottom: 15px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .card-header h2 {
+        margin: 0;
+        font-size: 18px;
+        flex: 1;
+      }
+      .btn {
+        display: inline-block;
+        background-color: #007bff;
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+        text-decoration: none;
+        text-align: center;
+      }
+      .btn:hover {
+        background-color: #0056b3;
+      }
+      .btn-danger {
+        background-color: #dc3545;
+      }
+      .btn-danger:hover {
+        background-color: #c82333;
+      }
+      .btn-success {
+        background-color: #28a745;
+      }
+      .btn-success:hover {
+        background-color: #218838;
+      }
+      .form-group {
+        margin-bottom: 15px;
+      }
+      .form-group label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: 500;
+      }
+      .form-group input,
+      .form-group select,
+      .form-group textarea {
+        width: 100%;
+        padding: 8px 12px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 14px;
+        box-sizing: border-box;
+      }
+      .form-group textarea {
+        height: 80px;
+        resize: vertical;
+      }
+      .form-row {
+        display: flex;
+        gap: 15px;
+      }
+      .form-row .form-group {
+        flex: 1;
+      }
+      .service-item {
+        border: 1px solid #eaeaea;
+        border-radius: 8px;
+        padding: 15px;
+        margin-bottom: 15px;
+        background-color: #fafbfc;
+      }
+      .service-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      .service-header h3 {
+        margin: 0;
+        font-size: 16px;
+      }
+      .service-details {
+        font-size: 14px;
+        color: #666;
+      }
+      .service-details div {
+        margin-bottom: 5px;
+      }
+      .status-indicator {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        margin-right: 8px;
+        display: inline-block;
+      }
+      .status-connected {
+        background-color: #28a745;
+      }
+      .status-disconnected {
+        background-color: #dc3545;
+      }
+      .message {
+        margin-top: 10px;
+        padding: 10px;
+        border-radius: 4px;
+        display: none;
+      }
+      .success {
+        background-color: #d4edda;
+        color: #155724;
+      }
+      .error {
+        background-color: #f8d7da;
+        color: #721c24;
+      }
+      .modal {
+        display: none;
+        position: fixed;
+        z-index: 1000;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5);
+        overflow-y: auto;
+      }
+      .modal-content {
+        background-color: white;
+        margin: 5% auto;
+        padding: 20px;
+        border-radius: 8px;
+        width: 90%;
+        max-width: 600px;
+      }
+      .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+      }
+      .modal-header h2 {
+        margin: 0;
+      }
+      .close {
+        color: #aaa;
+        font-size: 28px;
+        font-weight: bold;
+        cursor: pointer;
+      }
+      .close:hover {
+        color: #000;
+      }
+      .auth-fields,
+      .transport-fields {
+        display: none;
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <div class="nav">
-        <div class="container">
-            <ul>
-                <li><a href="/">Chat</a></li>
-                <li><a href="/settings.html" class="active">Settings</a></li>
-            </ul>
-        </div>
+      <div class="nav-container">
+        <a href="/" class="nav-brand">Routekit</a>
+        <ul>
+          <li><a href="/">Chat</a></li>
+          <li><a href="/settings.html" class="active">Settings</a></li>
+        </ul>
+      </div>
     </div>
     <div class="container">
-        <h1>Service Configuration</h1>
-        <p>Configure the MCP services you want Routekit to connect to.</p>
-        <div class="content-wrapper">
-            <div class="services-container">
-                <div class="card">
-                    <div class="card-header">
-                        <h2>Your Services</h2>
-                        <button class="btn" onclick="openAddServiceModal()">+ Add Service</button>
-                    </div>
-                    <div id="services-list">
-                        <p>Loading services...</p>
-                    </div>
-                </div>
-                <div id="message-area" class="message"></div>
+      <h1>Service Configuration</h1>
+      <p>Configure the MCP services you want Routekit to connect to.</p>
+      <div class="content-wrapper">
+        <div class="services-container">
+          <div class="card">
+            <div class="card-header">
+              <h2>Your Services</h2>
+              <button class="btn" onclick="openAddServiceModal()">
+                + Add Service
+              </button>
             </div>
+            <div id="services-list"><p>Loading services...</p></div>
+          </div>
+          <div id="message-area" class="message"></div>
         </div>
+      </div>
     </div>
 
     <!-- Add Service Modal -->
     <div id="addServiceModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>Add New Service</h2>
-                <span class="close" onclick="closeAddServiceModal()">&times;</span>
-            </div>
-            <form id="service-form">
-                <div class="form-group">
-                    <label for="service-name">Service Name</label>
-                    <input type="text" id="service-name" name="service_name" required placeholder="e.g., My GitHub Server">
-                </div>
-                <div class="form-group">
-                    <label for="transport-type">Transport Type</label>
-                    <select id="transport-type" name="transport_type" required>
-                        <option value="">Select transport type</option>
-                        <option value="streamable-http">Streamable HTTP</option>
-                        <option value="sse">Server-Sent Events (SSE)</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="mcp-server-url">MCP Server URL</label>
-                    <input type="url" id="mcp-server-url" name="mcp_server_url" required placeholder="https://api.example.com/mcp">
-                </div>
-                <div class="form-group">
-                    <label for="auth-type">Authentication Type</label>
-                    <select id="auth-type" name="auth_type" required onchange="toggleOAuthFields()">
-                        <option value="">Select authentication type</option>
-                        <option value="pat">Personal Access Token</option>
-                        <option value="oauth2.1">OAuth 2.1</option>
-                    </select>
-                </div>
-                <div class="oauth-fields" id="oauth-fields">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="client-id">Client ID</label>
-                            <input type="text" id="client-id" name="client_id" placeholder="Your OAuth client ID">
-                        </div>
-                        <div class="form-group">
-                            <label for="client-secret">Client Secret</label>
-                            <input type="password" id="client-secret" name="client_secret" placeholder="Your OAuth client secret">
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="authorization-url">Authorization URL</label>
-                            <input type="url" id="authorization-url" name="authorization_url" placeholder="https://provider.com/oauth/authorize">
-                        </div>
-                        <div class="form-group">
-                            <label for="token-url">Token URL</label>
-                            <input type="url" id="token-url" name="token_url" placeholder="https://provider.com/oauth/token">
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label for="scopes">Scopes (optional)</label>
-                        <textarea id="scopes" name="scopes" placeholder="read write admin (space-separated)"></textarea>
-                    </div>
-                    <div class="form-group">
-                        <label for="audience">Audience (optional)</label>
-                        <input type="text" id="audience" name="audience" placeholder="api.example.com">
-                    </div>
-                </div>
-                <div class="sse-info" id="sse-info" style="display: none;">
-                    <div style="background-color: #e3f2fd; padding: 15px; border-radius: 4px; margin-bottom: 15px;">
-                        <h4 style="margin: 0 0 10px 0; color: #1976d2;">SSE Service Configuration</h4>
-                        <p style="margin: 0; font-size: 14px; color: #424242;">
-                            For SSE services, <code>mcp-remote</code> handles OAuth authentication automatically. 
-                            You only need to provide the service name and MCP server URL. 
-                            The first time you connect, you'll be prompted to authenticate in your browser.
-                        </p>
-                    </div>
-                </div>
-                <div style="text-align: right; margin-top: 20px;">
-                    <button type="button" onclick="closeAddServiceModal()" style="margin-right: 10px;">Cancel</button>
-                    <button type="submit" class="btn">Add Service</button>
-                </div>
-            </form>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Add New Service</h2>
+          <span class="close" onclick="closeAddServiceModal()">×</span>
         </div>
+        <form id="service-form">
+          <div class="form-group">
+            <label for="service-name">Service Name</label>
+            <input
+              type="text"
+              id="service-name"
+              name="service_name"
+              required
+              placeholder="e.g., My GitHub Server"
+            />
+          </div>
+          <div class="form-group">
+            <label for="transport-type">Transport Type</label>
+            <select id="transport-type" name="transport_type" required>
+              <option value="">Select transport type...</option>
+              <option value="streamable-http">Remote - Streamable HTTP</option>
+              <option value="sse">Remote - SSE (via mcp-remote)</option>
+              <option value="local_stdio">Local - Stdio Command</option>
+            </select>
+          </div>
+
+          <!-- Fields for Remote Transports -->
+          <div id="remote-transport-fields" class="transport-fields">
+            <div class="form-group">
+              <label for="mcp-server-url">MCP Server URL</label>
+              <input
+                type="url"
+                id="mcp-server-url"
+                name="mcp_server_url"
+                placeholder="https://api.example.com/mcp"
+              />
+            </div>
+            <div class="form-group">
+              <label for="auth-type">Authentication Type</label>
+              <select id="auth-type" name="auth_type">
+                <option value="no_auth">No Authentication</option>
+                <option value="pat">Personal Access Token (Bearer)</option>
+                <option value="api_key_in_header">API Key (in Header)</option>
+                <option value="api_key_in_url">API Key (in URL)</option>
+                <option value="oauth2.1">OAuth 2.1</option>
+                <option value="mcp_remote_managed">
+                  mcp-remote Managed (for SSE)
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Fields for Local Stdio Transport -->
+          <div id="local-stdio-fields" class="transport-fields">
+            <div class="form-group">
+              <label for="command">Command</label>
+              <input
+                type="text"
+                id="command"
+                name="command"
+                placeholder="e.g., uv run server.py"
+              />
+              <small
+                >Enter the full command and its arguments, separated by
+                spaces.</small
+              >
+            </div>
+            <div class="form-group">
+              <label for="working-dir">Working Directory (optional)</label>
+              <input
+                type="text"
+                id="working-dir"
+                name="working_dir"
+                placeholder="/path/to/your/mcp-server"
+              />
+            </div>
+            <div class="form-group">
+              <label for="environment-vars"
+                >Environment Variables (optional)</label
+              >
+              <textarea
+                id="environment-vars"
+                name="environment_vars"
+                placeholder="KEY1=VALUE1
+KEY2=VALUE2"
+              ></textarea>
+              <small>Enter one key-value pair per line.</small>
+            </div>
+          </div>
+
+          <!-- Fields for PAT Auth -->
+          <div id="pat-fields" class="auth-fields">
+            <div class="form-group">
+              <label for="pat-token">Personal Access Token (PAT)</label>
+              <input type="password" id="pat-token" name="token" />
+            </div>
+          </div>
+
+          <!-- Fields for API Key in Header -->
+          <div id="api-key-header-fields" class="auth-fields">
+            <div class="form-group">
+              <label for="api-key-header-name">Header Name</label>
+              <input
+                type="text"
+                id="api-key-header-name"
+                name="header_name"
+                placeholder="e.g., X-API-Key"
+              />
+            </div>
+            <div class="form-group">
+              <label for="api-key-header-value">API Key</label>
+              <input type="password" id="api-key-header-value" name="api_key" />
+            </div>
+          </div>
+
+          <!-- Fields for API Key in URL -->
+          <div id="api-key-url-fields" class="auth-fields">
+            <div class="form-group">
+              <label for="api-key-url-param">Query Parameter Name</label>
+              <input
+                type="text"
+                id="api-key-url-param"
+                name="query_param_name"
+                placeholder="e.g., api_key"
+              />
+            </div>
+            <div class="form-group">
+              <label for="api-key-url-value">API Key</label>
+              <input
+                type="password"
+                id="api-key-url-value"
+                name="api_key_url"
+              />
+            </div>
+          </div>
+
+          <!-- Fields for OAuth 2.1 -->
+          <div id="oauth-fields" class="auth-fields">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="client-id">Client ID</label>
+                <input
+                  type="text"
+                  id="client-id"
+                  name="client_id"
+                  placeholder="Your OAuth client ID"
+                />
+              </div>
+              <div class="form-group">
+                <label for="client-secret">Client Secret</label>
+                <input
+                  type="password"
+                  id="client-secret"
+                  name="client_secret"
+                  placeholder="Your OAuth client secret"
+                />
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="authorization-url">Authorization URL</label>
+                <input
+                  type="url"
+                  id="authorization-url"
+                  name="authorization_url"
+                  placeholder="https://provider.com/oauth/authorize"
+                />
+              </div>
+              <div class="form-group">
+                <label for="token-url">Token URL</label>
+                <input
+                  type="url"
+                  id="token-url"
+                  name="token_url"
+                  placeholder="https://provider.com/oauth/token"
+                />
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="scopes">Scopes (optional)</label>
+              <textarea
+                id="scopes"
+                name="scopes"
+                placeholder="read write admin (space-separated)"
+              ></textarea>
+            </div>
+            <div class="form-group">
+              <label for="audience">Audience (optional)</label>
+              <input
+                type="text"
+                id="audience"
+                name="audience"
+                placeholder="api.example.com"
+              />
+            </div>
+          </div>
+
+          <div style="text-align: right; margin-top: 20px">
+            <button
+              type="button"
+              onclick="closeAddServiceModal()"
+              style="margin-right: 10px"
+            >
+              Cancel
+            </button>
+            <button type="submit" class="btn">Add Service</button>
+          </div>
+        </form>
+      </div>
     </div>
 
     <script>
-        document.addEventListener('DOMContentLoaded', async () => {
-            // --- Authenticate user or redirect to login ---
-            try {
-                await checkAuth();
-            } catch(e) {
-                return; // checkAuth handles the redirect
-            }
+      const transportSelect = document.getElementById("transport-type");
+      const authSelect = document.getElementById("auth-type");
 
+      document.addEventListener("DOMContentLoaded", async () => {
+        try {
+          await checkAuth();
+          await loadServices();
+          transportSelect.addEventListener("change", updateFormVisibility);
+          authSelect.addEventListener("change", updateFormVisibility);
+          updateFormVisibility(); // Initial call
+        } catch (e) {
+          // checkAuth handles redirect
+        }
+      });
+
+      function updateFormVisibility() {
+        const transportType = transportSelect.value;
+        const authType = authSelect.value;
+
+        // Hide all conditional sections first
+        document
+          .querySelectorAll(".transport-fields, .auth-fields")
+          .forEach((el) => (el.style.display = "none"));
+
+        // Show fields based on transport type
+        if (transportType === "streamable-http" || transportType === "sse") {
+          document.getElementById("remote-transport-fields").style.display =
+            "block";
+          document.getElementById("mcp-server-url").required = true;
+
+          authSelect.disabled = false;
+          // For SSE, we default the auth type and disable the selector
+          if (transportType === "sse") {
+            authSelect.value = "mcp_remote_managed";
+            authSelect.disabled = true;
+          }
+
+          // For remote transports, show auth fields based on auth type
+          switch (authType) {
+            case "pat":
+              document.getElementById("pat-fields").style.display = "block";
+              break;
+            case "api_key_in_header":
+              document.getElementById("api-key-header-fields").style.display =
+                "block";
+              break;
+            case "api_key_in_url":
+              document.getElementById("api-key-url-fields").style.display =
+                "block";
+              break;
+            case "oauth2.1":
+              document.getElementById("oauth-fields").style.display = "block";
+              break;
+          }
+        } else if (transportType === "local_stdio") {
+          document.getElementById("local-stdio-fields").style.display = "block";
+          document.getElementById("mcp-server-url").required = false;
+          // For local_stdio, auth is managed by the underlying tool, so we can set to no_auth and disable
+          authSelect.value = "no_auth";
+          authSelect.disabled = true;
+        } else {
+          authSelect.disabled = false;
+          document.getElementById("mcp-server-url").required = true;
+        }
+      }
+
+      document
+        .getElementById("service-form")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const formData = new FormData(e.target);
+          const serviceData = {};
+
+          // Collect all form data
+          for (const [key, value] of formData.entries()) {
+            if (value) {
+              serviceData[key] = value;
+            }
+          }
+
+          // Special handling for command array
+          if (serviceData.command) {
+            serviceData.command = serviceData.command.split(" ");
+          }
+          // Special handling for environment vars
+          if (serviceData.environment_vars) {
+            const envMap = {};
+            serviceData.environment_vars.split("\n").forEach((line) => {
+              const parts = line.split("=");
+              if (parts.length === 2 && parts[0].trim()) {
+                envMap[parts[0].trim()] = parts[1].trim();
+              }
+            });
+            serviceData.environment_vars = envMap;
+          }
+
+          // Handle the different api_key fields
+          if (serviceData.auth_type === "api_key_in_url") {
+            serviceData.api_key = formData.get("api_key_url");
+            delete serviceData.api_key_url;
+          }
+
+          // Set auth_type for sse and local_stdio
+          if (serviceData.transport_type === "sse")
+            serviceData.auth_type = "mcp_remote_managed";
+          if (serviceData.transport_type === "local_stdio")
+            serviceData.auth_type = "no_auth";
+
+          try {
+            const response = await fetch("/api/user/services", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(serviceData),
+            });
+            if (!response.ok) {
+              const errorData = await response.json();
+              throw new Error(errorData.error || "Failed to add service");
+            }
+            showMessage("Service added successfully!", "success");
+            closeAddServiceModal();
             await loadServices();
+          } catch (error) {
+            showMessage("Error adding service: " + error.message, "error");
+          }
         });
 
-        async function loadServices() {
-            const servicesList = document.getElementById('services-list');
-            try {
-                const [servicesResponse, statusResponse] = await Promise.all([
-                    fetch('/api/user/services'),
-                    fetch('/api/connectors/status')
-                ]);
-                
-                if (!servicesResponse.ok) throw new Error('Failed to load services');
-                if (!statusResponse.ok) throw new Error('Failed to load statuses');
-                
-                const services = await servicesResponse.json();
-                const statuses = await statusResponse.json();
-                
-                servicesList.innerHTML = '';
-                if (services.length === 0) {
-                    servicesList.innerHTML = '<p>No services configured yet. Click "Add Service" to get started.</p>';
-                    return;
-                }
+      async function loadServices() {
+        const servicesList = document.getElementById("services-list");
+        try {
+          const [servicesResponse, statusResponse] = await Promise.all([
+            fetch("/api/user/services"),
+            fetch("/api/connectors/status"),
+          ]);
 
-                services.forEach(service => {
-                    const status = statuses[service.service_name];
-                    const isConnected = status?.connected || false;
-                    const statusText = service.auth_type === 'mcp_remote_managed' ? 
-                        'Ready (connects automatically)' : 
-                        (isConnected ? 'Connected' : 'Not connected');
-                    
-                    const serviceHtml = `
+          if (!servicesResponse.ok) throw new Error("Failed to load services");
+          if (!statusResponse.ok) throw new Error("Failed to load statuses");
+
+          const services = (await servicesResponse.json()) || [];
+          const statuses = (await statusResponse.json()) || {};
+
+          servicesList.innerHTML = "";
+          if (services.length === 0) {
+            servicesList.innerHTML =
+              '<p>No services configured yet. Click "Add Service" to get started.</p>';
+            return;
+          }
+
+          services.forEach((service) => {
+            const status = statuses[service.service_name];
+            const isConnected = status?.connected || false;
+            const statusText =
+              service.auth_type === "mcp_remote_managed"
+                ? "Ready (connects on-demand)"
+                : isConnected
+                  ? "Connected"
+                  : "Not connected";
+
+            const serviceHtml = `
                         <div class="service-item">
                             <div class="service-header">
                                 <h3>${service.service_name}</h3>
@@ -208,137 +650,71 @@
                             </div>
                             <div class="service-details">
                                 <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-                                    <div class="status-indicator ${isConnected ? 'status-connected' : 'status-disconnected'}"></div>
+                                    <div class="status-indicator ${isConnected ? "status-connected" : "status-disconnected"}"></div>
                                     <span>${statusText}</span>
                                 </div>
                                 <div><strong>Transport:</strong> ${service.transport_type}</div>
-                                <div><strong>URL:</strong> ${service.mcp_server_url}</div>
+                                ${service.mcp_server_url ? `<div><strong>URL:</strong> ${service.mcp_server_url}</div>` : ""}
                                 <div><strong>Auth:</strong> ${service.auth_type}</div>
                             </div>
                         </div>`;
-                    servicesList.insertAdjacentHTML('beforeend', serviceHtml);
-                });
-            } catch (error) {
-                servicesList.innerHTML = '<p>Error loading services: ' + error.message + '</p>';
-            }
+            servicesList.insertAdjacentHTML("beforeend", serviceHtml);
+          });
+        } catch (error) {
+          servicesList.innerHTML =
+            "<p>Error loading services: " + error.message + "</p>";
         }
+      }
 
+      function openAddServiceModal() {
+        document.getElementById("service-form").reset();
+        updateFormVisibility();
+        document.getElementById("addServiceModal").style.display = "block";
+      }
 
-        function openAddServiceModal() {
-            document.getElementById('addServiceModal').style.display = 'block';
+      function closeAddServiceModal() {
+        document.getElementById("addServiceModal").style.display = "none";
+      }
+
+      async function deleteService(serviceId) {
+        if (!confirm("Are you sure you want to delete this service?")) return;
+        try {
+          const response = await fetch(`/api/user/services/${serviceId}`, {
+            method: "DELETE",
+          });
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || "Failed to delete service");
+          }
+          showMessage("Service deleted successfully!", "success");
+          await loadServices();
+        } catch (error) {
+          showMessage("Error deleting service: " + error.message, "error");
         }
+      }
 
-        function closeAddServiceModal() {
-            document.getElementById('addServiceModal').style.display = 'none';
-            document.getElementById('service-form').reset();
-            document.getElementById('oauth-fields').classList.remove('show');
+      function showMessage(text, type) {
+        const messageArea = document.getElementById("message-area");
+        messageArea.textContent = text;
+        messageArea.className = `message ${type}`;
+        messageArea.style.display = "block";
+        setTimeout(() => {
+          messageArea.style.display = "none";
+        }, 5000);
+      }
+
+      async function checkAuth() {
+        try {
+          const response = await fetch("/api/me");
+          if (!response.ok) {
+            window.location.href = "/login.html";
+            throw new Error("Not authenticated");
+          }
+        } catch (error) {
+          window.location.href = "/login.html";
+          throw new Error("Not authenticated");
         }
-
-        function toggleOAuthFields() {
-            const transportType = document.getElementById('transport-type').value;
-            const authType = document.getElementById('auth-type').value;
-            const oauthFields = document.getElementById('oauth-fields');
-            const sseInfo = document.getElementById('sse-info');
-            
-            // Show SSE info for SSE transport
-            if (transportType === 'sse') {
-                sseInfo.style.display = 'block';
-                oauthFields.classList.remove('show'); // Hide OAuth fields for SSE
-            } else {
-                sseInfo.style.display = 'none';
-                // Show OAuth fields only for streamable-http with oauth2.1
-                if (authType === 'oauth2.1') {
-                    oauthFields.classList.add('show');
-                } else {
-                    oauthFields.classList.remove('show');
-                }
-            }
-        }
-        
-        // Also trigger on transport type change
-        document.getElementById('transport-type').addEventListener('change', toggleOAuthFields);
-
-        document.getElementById('service-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const formData = new FormData(e.target);
-            const serviceData = {
-                service_name: formData.get('service_name'),
-                transport_type: formData.get('transport_type'),
-                mcp_server_url: formData.get('mcp_server_url'),
-                auth_type: formData.get('auth_type')
-            };
-
-            // For SSE services, mcp-remote handles OAuth automatically - no manual config needed
-            if (serviceData.transport_type === 'sse') {
-                serviceData.auth_type = 'mcp_remote_managed'; // Special auth type for mcp-remote
-            } else if (serviceData.auth_type === 'oauth2.1') {
-                // Only for streamable-http services that need manual OAuth config
-                serviceData.client_id = formData.get('client_id');
-                serviceData.client_secret = formData.get('client_secret');
-                serviceData.authorization_url = formData.get('authorization_url');
-                serviceData.token_url = formData.get('token_url');
-                serviceData.scopes = formData.get('scopes') ? formData.get('scopes').split(' ').filter(s => s.trim()) : [];
-                serviceData.audience = formData.get('audience') || null;
-            }
-
-            try {
-                const response = await fetch('/api/user/services', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(serviceData)
-                });
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || 'Failed to add service');
-                }
-
-                showMessage('Service added successfully!', 'success');
-                closeAddServiceModal();
-                await loadServices();
-            } catch (error) {
-                showMessage('Error adding service: ' + error.message, 'error');
-            }
-        });
-
-        async function deleteService(serviceId) {
-            if (!confirm('Are you sure you want to delete this service?')) return;
-            
-            try {
-                const response = await fetch(`/api/user/services/${serviceId}`, {
-                    method: 'DELETE'
-                });
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || 'Failed to delete service');
-                }
-
-                showMessage('Service deleted successfully!', 'success');
-                await loadServices();
-            } catch (error) {
-                showMessage('Error deleting service: ' + error.message, 'error');
-            }
-        }
-
-
-        function showMessage(text, type) {
-            const messageArea = document.getElementById('message-area');
-            messageArea.textContent = text;
-            messageArea.className = `message ${type}`;
-            messageArea.style.display = 'block';
-            setTimeout(() => { messageArea.style.display = 'none'; }, 5000);
-        }
-
-        async function checkAuth() {
-            try {
-                const response = await fetch('/api/me');
-                if (!response.ok) window.location.href = '/login.html';
-            } catch (error) {
-                window.location.href = '/login.html';
-            }
-        }
+      }
     </script>
-</body>
+  </body>
 </html>

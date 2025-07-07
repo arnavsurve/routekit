@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -14,12 +15,37 @@ import (
 	"github.com/arnavsurve/routekit/pkg/config"
 	"github.com/arnavsurve/routekit/pkg/crypto"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 )
 
 type ServicesHandler struct {
 	DBPool *pgxpool.Pool
+}
+
+type createServiceRequest struct {
+	ServiceName   string  `json:"service_name"`
+	TransportType string  `json:"transport_type"`
+	MCPServerURL  *string `json:"mcp_server_url,omitempty"`
+	AuthType      string  `json:"auth_type"`
+
+	// Auth fields
+	Token            string   `json:"token,omitempty"`
+	HeaderName       string   `json:"header_name,omitempty"`
+	APIKey           string   `json:"api_key,omitempty"`
+	QueryParamName   string   `json:"query_param_name,omitempty"`
+	ClientID         string   `json:"client_id,omitempty"`
+	ClientSecret     string   `json:"client_secret,omitempty"`
+	AuthorizationURL string   `json:"authorization_url,omitempty"`
+	TokenURL         string   `json:"token_url,omitempty"`
+	Scopes           []string `json:"scopes,omitempty"`
+	Audience         *string  `json:"audience,omitempty"`
+
+	// Local stdio fields
+	Command         []string          `json:"command,omitempty"`
+	WorkingDir      *string           `json:"working_dir,omitempty"`
+	EnvironmentVars map[string]string `json:"environment_vars,omitempty"`
 }
 
 // HandleGetUserServices returns all service configurations for the user
@@ -30,7 +56,7 @@ func (h *ServicesHandler) HandleGetUserServices(c echo.Context) error {
 
 	rows, err := h.DBPool.Query(context.Background(), `
 		SELECT id, service_name, transport_type, mcp_server_url, auth_type, 
-		       auth_config_encrypted, scopes, audience
+		       auth_config_encrypted, scopes, audience, command, working_dir, environment_vars
 		FROM user_service_configs 
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -43,28 +69,33 @@ func (h *ServicesHandler) HandleGetUserServices(c echo.Context) error {
 	var services []config.ServiceConfig
 	for rows.Next() {
 		var service config.ServiceConfig
-		var authConfigEncrypted []byte
-		var scopesJSON []byte
+		var authConfigEncrypted, scopesJSON, envVarsJSON []byte
 
 		err := rows.Scan(
 			&service.ID, &service.Name, &service.TransportType, &service.MCPServerURL,
 			&service.AuthType, &authConfigEncrypted, &scopesJSON, &service.Audience,
+			&service.Command, &service.WorkingDir, &envVarsJSON,
 		)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("Failed to scan service: %v", err)})
 		}
 
-		// Parse scopes JSON
-		var scopes []string
 		if scopesJSON != nil {
-			if err := json.Unmarshal(scopesJSON, &scopes); err != nil {
-				scopes = []string{}
+			if err := json.Unmarshal(scopesJSON, &service.Scopes); err != nil {
+				service.Scopes = []string{}
 			}
 		} else {
-			scopes = []string{}
+			service.Scopes = []string{}
 		}
 
-		// Decrypt auth config
+		if envVarsJSON != nil {
+			if err := json.Unmarshal(envVarsJSON, &service.EnvironmentVars); err != nil {
+				service.EnvironmentVars = make(map[string]string)
+			}
+		} else {
+			service.EnvironmentVars = make(map[string]string)
+		}
+
 		authConfigJSON, err := crypto.Decrypt(authConfigEncrypted)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to decrypt auth config"})
@@ -75,7 +106,6 @@ func (h *ServicesHandler) HandleGetUserServices(c echo.Context) error {
 		}
 
 		service.UserID = userID
-		service.Scopes = scopes
 		services = append(services, service)
 	}
 
@@ -88,72 +118,61 @@ func (h *ServicesHandler) HandleCreateUserService(c echo.Context) error {
 	claims := user.Claims.(*auth.Claims)
 	userID := claims.UserID
 
-	var req struct {
-		ServiceName      string   `json:"service_name"`
-		TransportType    string   `json:"transport_type"`
-		MCPServerURL     string   `json:"mcp_server_url"`
-		AuthType         string   `json:"auth_type"`
-		ClientID         string   `json:"client_id,omitempty"`
-		ClientSecret     string   `json:"client_secret,omitempty"`
-		AuthorizationURL string   `json:"authorization_url,omitempty"`
-		TokenURL         string   `json:"token_url,omitempty"`
-		Scopes           []string `json:"scopes,omitempty"`
-		Audience         string   `json:"audience,omitempty"`
-	}
-
+	var req createServiceRequest
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	// Create service config  
 	service := config.ServiceConfig{
-		UserID:        userID,
-		Name:          req.ServiceName,
-		TransportType: req.TransportType,
-		MCPServerURL:  req.MCPServerURL,
-		AuthType:      req.AuthType,
-		Scopes:        req.Scopes,
-		Audience:      req.Audience,
-	}
-	
-	// Initialize empty slices if nil
-	if service.Scopes == nil {
-		service.Scopes = []string{}
-	}
-
-	// Create appropriate auth config based on auth type
-	if service.AuthType == "mcp_remote_managed" {
-		service.AuthConfig = config.AuthConfig{
-			Type: "mcp_remote_managed",
-		}
-	} else {
-		service.AuthConfig = config.AuthConfig{
+		UserID:          userID,
+		Name:            req.ServiceName,
+		TransportType:   req.TransportType,
+		MCPServerURL:    req.MCPServerURL,
+		AuthType:        req.AuthType,
+		Scopes:          req.Scopes,
+		Audience:        req.Audience,
+		Command:         req.Command,
+		WorkingDir:      req.WorkingDir,
+		EnvironmentVars: req.EnvironmentVars,
+		AuthConfig: config.AuthConfig{
 			Type:             req.AuthType,
+			Token:            req.Token,
+			HeaderName:       req.HeaderName,
+			APIKey:           req.APIKey,
+			QueryParamName:   req.QueryParamName,
 			ClientID:         req.ClientID,
 			ClientSecret:     req.ClientSecret,
 			AuthorizationURL: req.AuthorizationURL,
 			TokenURL:         req.TokenURL,
-		}
+		},
 	}
 
-	// Validate
+	if service.Scopes == nil {
+		service.Scopes = []string{}
+	}
+	if service.EnvironmentVars == nil {
+		service.EnvironmentVars = make(map[string]string)
+	}
+
 	if err := config.ValidateServiceConfig(&service); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
-	// Check for duplicate MCP server URL for this user
-	var exists bool
-	err := h.DBPool.QueryRow(context.Background(),
-		"SELECT EXISTS(SELECT 1 FROM user_service_configs WHERE user_id = $1 AND mcp_server_url = $2)",
-		userID, req.MCPServerURL).Scan(&exists)
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to check for duplicates"})
-	}
-	if exists {
-		return c.JSON(http.StatusConflict, map[string]string{"error": "Service with this MCP server URL already exists"})
+	if (service.TransportType == "streamable-http" || service.TransportType == "sse") && service.MCPServerURL != nil {
+		var exists bool
+		if service.MCPServerURL != nil {
+			err := h.DBPool.QueryRow(context.Background(),
+				"SELECT EXISTS(SELECT 1 FROM user_service_configs WHERE user_id = $1 AND mcp_server_url = $2)",
+				userID, *service.MCPServerURL).Scan(&exists)
+			if err != nil {
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to check for duplicates"})
+			}
+			if exists {
+				return c.JSON(http.StatusConflict, map[string]string{"error": "Service with this MCP server URL already exists"})
+			}
+		}
 	}
 
-	// Encrypt auth config
 	authConfigJSON, err := json.Marshal(service.AuthConfig)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to serialize auth config"})
@@ -164,21 +183,24 @@ func (h *ServicesHandler) HandleCreateUserService(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to encrypt auth config"})
 	}
 
-	// Serialize scopes as JSON
 	scopesJSON, err := json.Marshal(service.Scopes)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to serialize scopes"})
 	}
 
-	// Insert into database
+	envVarsJSON, err := json.Marshal(service.EnvironmentVars)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to serialize environment variables"})
+	}
+
 	var serviceID string
 	err = h.DBPool.QueryRow(context.Background(), `
 		INSERT INTO user_service_configs 
-		(user_id, service_name, transport_type, mcp_server_url, auth_type, auth_config_encrypted, scopes, audience)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		(user_id, service_name, transport_type, mcp_server_url, auth_type, auth_config_encrypted, scopes, audience, command, working_dir, environment_vars)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id
-	`, userID, req.ServiceName, req.TransportType, req.MCPServerURL, req.AuthType,
-		authConfigEncrypted, scopesJSON, service.Audience).Scan(&serviceID)
+	`, userID, service.Name, service.TransportType, service.MCPServerURL, service.AuthType,
+		authConfigEncrypted, scopesJSON, service.Audience, service.Command, service.WorkingDir, envVarsJSON).Scan(&serviceID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("Failed to create service: %v", err)})
 	}
@@ -194,22 +216,28 @@ func (h *ServicesHandler) HandleDeleteUserService(c echo.Context) error {
 	userID := claims.UserID
 	serviceID := c.Param("id")
 
-	// Delete service config
+	var serviceName string
+	err := h.DBPool.QueryRow(context.Background(), "SELECT service_name FROM user_service_configs WHERE id = $1 AND user_id = $2", serviceID, userID).Scan(&serviceName)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "Service not found"})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to find service to delete"})
+	}
+
 	result, err := h.DBPool.Exec(context.Background(),
 		"DELETE FROM user_service_configs WHERE id = $1 AND user_id = $2",
 		serviceID, userID)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete service"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete service config"})
 	}
-
 	if result.RowsAffected() == 0 {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "Service not found"})
 	}
 
-	// Also disconnect the service if it's connected
 	_, _ = h.DBPool.Exec(context.Background(),
 		"DELETE FROM connected_services WHERE user_id = $1 AND service_name = $2",
-		userID, serviceID) // Using serviceID as service name for now
+		userID, serviceName)
 
 	return c.JSON(http.StatusOK, map[string]bool{"success": true})
 }
@@ -217,33 +245,41 @@ func (h *ServicesHandler) HandleDeleteUserService(c echo.Context) error {
 // Helper function to get user service config by service name
 func (h *ServicesHandler) getUserServiceConfig(userID, serviceName string) (*config.ServiceConfig, error) {
 	var service config.ServiceConfig
-	var authConfigEncrypted []byte
-	var scopesJSON []byte
+	var authConfigEncrypted, scopesJSON, envVarsJSON []byte
 
 	err := h.DBPool.QueryRow(context.Background(), `
 		SELECT id, service_name, transport_type, mcp_server_url, auth_type, 
-		       auth_config_encrypted, scopes, audience
+		       auth_config_encrypted, scopes, audience, command, working_dir, environment_vars
 		FROM user_service_configs 
 		WHERE user_id = $1 AND service_name = $2
 	`, userID, serviceName).Scan(
 		&service.ID, &service.Name, &service.TransportType, &service.MCPServerURL,
 		&service.AuthType, &authConfigEncrypted, &scopesJSON, &service.Audience,
+		&service.Command, &service.WorkingDir, &envVarsJSON,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("service not found: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("service %q not found for this user", serviceName)
+		}
+		return nil, fmt.Errorf("database error fetching service config: %w", err)
 	}
 
-	// Parse scopes JSON
-	var scopes []string
 	if scopesJSON != nil {
-		if err := json.Unmarshal(scopesJSON, &scopes); err != nil {
-			scopes = []string{}
+		if err := json.Unmarshal(scopesJSON, &service.Scopes); err != nil {
+			service.Scopes = []string{}
 		}
 	} else {
-		scopes = []string{}
+		service.Scopes = []string{}
 	}
 
-	// Decrypt auth config
+	if envVarsJSON != nil {
+		if err := json.Unmarshal(envVarsJSON, &service.EnvironmentVars); err != nil {
+			service.EnvironmentVars = make(map[string]string)
+		}
+	} else {
+		service.EnvironmentVars = make(map[string]string)
+	}
+
 	authConfigJSON, err := crypto.Decrypt(authConfigEncrypted)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt auth config: %w", err)
@@ -254,7 +290,6 @@ func (h *ServicesHandler) getUserServiceConfig(userID, serviceName string) (*con
 	}
 
 	service.UserID = userID
-	service.Scopes = scopes
 	return &service, nil
 }
 
@@ -302,8 +337,8 @@ func (h *ServicesHandler) HandleOAuthConnect(c echo.Context) error {
 		"response_type": {"code"},
 		"prompt":        {"consent"},
 	}
-	if serviceConfig.Audience != "" {
-		authURLParams.Set("audience", serviceConfig.Audience)
+	if serviceConfig.Audience != nil && *serviceConfig.Audience != "" {
+		authURLParams.Set("audience", *serviceConfig.Audience)
 	}
 
 	authURL := serviceConfig.AuthConfig.AuthorizationURL + "?" + authURLParams.Encode()
@@ -475,31 +510,32 @@ func (h *ServicesHandler) HandleGetAllStatuses(c echo.Context) error {
 	}
 	defer connectedRows.Close()
 
-	connectedServices := make(map[string]bool)
+	servicesWithCreds := make(map[string]bool)
 	for connectedRows.Next() {
 		var name string
 		if err := connectedRows.Scan(&name); err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "db scan error"})
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "db scan error for connected services"})
 		}
-		connectedServices[name] = true
+		servicesWithCreds[name] = true
 	}
 
 	// Build status for all services
 	statuses := make(map[string]any)
 	for _, service := range services {
-		if service.AuthType == "mcp_remote_managed" {
-			// SSE services with mcp-remote are always "ready" - they connect when first used
-			statuses[service.Name] = map[string]any{
-				"connected": true,
-				"type":      "mcp_remote_managed",
-			}
-		} else {
-			// PAT/OAuth2.1 services need manual connection
-			connected := connectedServices[service.Name]
-			statuses[service.Name] = map[string]any{
-				"connected": connected,
-				"type":      service.AuthType,
-			}
+		var isConnected bool
+
+		switch service.AuthType {
+		case "mcp_remote_managed", "no_auth":
+			isConnected = true
+		case "pat", "api_key_in_header", "api_key_in_url", "oauth2.1":
+			isConnected = servicesWithCreds[service.Name]
+		default:
+			isConnected = false
+		}
+
+		statuses[service.Name] = map[string]any{
+			"connected": isConnected,
+			"type":      service.AuthType,
 		}
 	}
 
@@ -537,4 +573,3 @@ func generateRandomString(length int) (string, error) {
 	}
 	return base64.URLEncoding.EncodeToString(bytes), nil
 }
-

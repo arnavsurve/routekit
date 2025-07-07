@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -125,7 +126,7 @@ func (gw *GatewayServer) mcpAuthMiddleware(next server.ToolHandlerFunc) server.T
 func (gw *GatewayServer) getUserServiceConfigs(ctx context.Context, userID string) ([]config.ServiceConfig, error) {
 	rows, err := gw.db.Query(ctx, `
 		SELECT id, service_name, transport_type, mcp_server_url, auth_type, 
-		       auth_config_encrypted, scopes, audience
+		       auth_config_encrypted, scopes, audience, command, working_dir, environment_vars
 		FROM user_service_configs 
 		WHERE user_id = $1
 	`, userID)
@@ -137,12 +138,12 @@ func (gw *GatewayServer) getUserServiceConfigs(ctx context.Context, userID strin
 	var services []config.ServiceConfig
 	for rows.Next() {
 		var service config.ServiceConfig
-		var authConfigEncrypted []byte
-		var scopesJSON []byte
+		var authConfigEncrypted, scopesJSON, envVarsJSON []byte
 
 		err := rows.Scan(
 			&service.ID, &service.Name, &service.TransportType, &service.MCPServerURL,
 			&service.AuthType, &authConfigEncrypted, &scopesJSON, &service.Audience,
+			&service.Command, &service.WorkingDir, &envVarsJSON,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan service config: %w", err)
@@ -179,6 +180,7 @@ func (gw *GatewayServer) getUserServiceConfigs(ctx context.Context, userID strin
 func (gw *GatewayServer) getOrCreateClient(ctx context.Context, userID string, service config.ServiceConfig) (*client.Client, error) {
 	cacheKey := userID + ":" + service.Name
 
+	// Check cache for an existing, healthy client
 	if cachedClient, ok := gw.clientCache.Load(cacheKey); ok {
 		clientInstance := cachedClient.(*client.Client)
 		pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -187,19 +189,18 @@ func (gw *GatewayServer) getOrCreateClient(ctx context.Context, userID string, s
 			log.Printf("Gateway: Reusing cached client for %s", cacheKey)
 			return clientInstance, nil
 		}
-
 		log.Printf("Gateway: Cached client for %s failed ping, creaing new one.", cacheKey)
 		gw.clientCache.Delete(cacheKey)
 		clientInstance.Close()
 	}
 
+	// Lock to prevent concurrent client creation for same user/service
 	lock, _ := gw.clientCreationLocks.LoadOrStore(cacheKey, &sync.Mutex{})
 	creationLock := lock.(*sync.Mutex)
 	creationLock.Lock()
 	defer creationLock.Unlock()
 
 	// Double check cache after acquiring lock in case another goroutine created the client
-	// while we were waiting for the lock.
 	if cachedClient, ok := gw.clientCache.Load(cacheKey); ok {
 		log.Printf("Gateway: Reusing client for %s (created by another goroutine)", cacheKey)
 		return cachedClient.(*client.Client), nil
@@ -215,60 +216,43 @@ func (gw *GatewayServer) getOrCreateClient(ctx context.Context, userID string, s
 	gw.clientCache.Store(cacheKey, newClient)
 	log.Printf("Gateway: Stored new client in cache for %s", cacheKey)
 
-	// NOTE: The mcp-go Stdio transport does not expose its context, so we cannot automatically
-	// clean up the cache when the underlying process dies. The client will be removed from cache
-	// on the next request if its ping fails. This is a limitation of the current SDK.
-	// The logic for transportWithContext and transportWithCancel has been removed as it's not
-	// supported by all transports in the provided mcp-go version.
-
 	return newClient, nil
 }
 
+// createClientForService is the heart of the gateway's dynamic connection logic.
+// It instantiates the correct MCP client based on the service's configuration.
 func (gw *GatewayServer) createClientForService(ctx context.Context, userID string, service config.ServiceConfig) (*client.Client, error) {
-	log.Printf("Gateway: Creating client for service %q using auth type %q at %s", service.Name, service.AuthType, service.MCPServerURL)
+	log.Printf("Gateway: Creating client for service %q (transport: %s, auth: %s)", service.Name, service.TransportType, service.AuthType)
 
-	var c *client.Client
-	var credentials []byte
-	var err error
-	
-	// For mcp_remote_managed services, credentials are handled automatically by mcp-remote
-	if service.AuthType != "mcp_remote_managed" {
-		credentials, err = gw.getCredentialsForService(ctx, userID, service.Name)
-		if err != nil {
-			return nil, err
-		}
-	}
+	if service.TransportType == "sse" && service.AuthType == "mcp_remote_managed" {
+		log.Printf("Gateway: Handling mcp_remote_managed service %s via stdio", service.Name)
 
-	switch service.GetTransport() {
-	case "stdio":
 		command := service.GenerateCommand()
 		if len(command) == 0 {
-			return nil, fmt.Errorf("command generation failed for service %s", service.Name)
+			return nil, fmt.Errorf("command generation failed for SSE service %s", service.Name)
 		}
 
-		// For stdio services like Atlassian/Linear, we need a unique config dir per user/service
-		// to isolate OAuth tokens managed by mcp-remote.
 		configDir := fmt.Sprintf("/tmp/routekit_auth/user_%s_service_%s", userID, service.Name)
 		if err := os.MkdirAll(configDir, 0755); err != nil {
-			return nil, fmt.Errorf("failed to create auth config dir: %w", err)
+			return nil, fmt.Errorf("failed to create auth config dir for mcp-remote: %w", err)
 		}
 
 		env := []string{"MCP_REMOTE_CONFIG_DIR=" + configDir}
-
 		cmdName := command[0]
 		args := command[1:]
 
-		c, err = client.NewStdioMCPClient(cmdName, env, args...)
+		c, err := client.NewStdioMCPClient(cmdName, env, args...)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create stdio client for %s: %w", service.Name, err)
+			return nil, fmt.Errorf("failed to create stdio client for mcp-remote: %w", err)
 		}
 
-		authURLChan := make(chan string)
+		// Race initialization against stderr scanning for an auth URL
+		authURLChan := make(chan string, 1)
 		errChan := make(chan error, 1)
 		stderr, ok := client.GetStderr(c)
 		if !ok {
 			c.Close()
-			return nil, fmt.Errorf("failed to get stderr from stdio client for %s", service.Name)
+			return nil, fmt.Errorf("failed to get stderr from mcp-remote process for %s", service.Name)
 		}
 
 		go func() {
@@ -280,12 +264,12 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 				matches := re.FindStringSubmatch(line)
 				if len(matches) > 1 {
 					authURLChan <- matches[1]
+					close(authURLChan)
 					return
 				}
 			}
-
 			if err := scanner.Err(); err != nil {
-				errChan <- fmt.Errorf("failed to scan stderr from stdio client for %s: %w", service.Name, err)
+				errChan <- fmt.Errorf("failed to scan stderr from mcp-remote for %s: %w", service.Name, err)
 			}
 		}()
 
@@ -294,17 +278,24 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 
 		var initErr error
 		initDone := make(chan struct{})
+
 		go func() {
 			_, initErr = c.Initialize(initCtx, mcp.InitializeRequest{
-				Params: mcp.InitializeParams{
-					ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
-				},
+				Params: mcp.InitializeParams{ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION},
 			})
 			close(initDone)
 		}()
 
 		select {
-		case authURL := <-authURLChan:
+		case authURL, ok := <-authURLChan:
+			if !ok { // Channel was closed without sending a URL
+				<-initDone // Wait for the init to finish to get the error
+				if initErr != nil {
+					c.Close()
+					return nil, fmt.Errorf("stdio client for %s failed to initialize: %w", service.Name, initErr)
+				}
+				return nil, fmt.Errorf("mcp-remote process exited without providing an auth URL or initializing")
+			}
 			log.Printf("Gateway: Intercepted auth URL for %s: %s", service.Name, authURL)
 			c.Close()
 			jsonResponse := fmt.Sprintf(
@@ -313,75 +304,79 @@ func (gw *GatewayServer) createClientForService(ctx context.Context, userID stri
 				authURL,
 			)
 			return nil, errors.New(jsonResponse)
-
 		case <-initDone:
 			if initErr != nil {
 				c.Close()
 				return nil, fmt.Errorf("failed to initialize stdio client for %s: %w", service.Name, initErr)
 			}
-			log.Printf("Gateway: Successfully initialized stdio client for %s without needing new auth.", service.Name)
+			log.Printf("Gateway: Successfully initialized stdio client for %s via mcp-remote.", service.Name)
 			return c, nil
-
 		case err := <-errChan:
 			c.Close()
 			return nil, err
-
 		case <-initCtx.Done():
 			c.Close()
 			return nil, fmt.Errorf("timeout waiting for stdio client initialization for %s", service.Name)
 		}
+	}
 
+	switch service.TransportType {
 	case "streamable-http":
-		var opts []transport.StreamableHTTPCOption
+		if service.MCPServerURL == nil || *service.MCPServerURL == "" {
+			return nil, fmt.Errorf("missing mcp_server_url for remote service %s", service.Name)
+		}
+		urlToConnect := *service.MCPServerURL
+		headers := make(map[string]string)
+		authConfig := service.AuthConfig
 
 		switch service.AuthType {
 		case "pat":
-			if len(credentials) == 0 {
-				return nil, fmt.Errorf(`{"action_required": "user_authentication", "service_name": "%s"}`, service.Name)
+			if authConfig.Token == "" {
+				return nil, fmt.Errorf(`{"action_required": "user_authentication", "service_name": "%s", "auth_type": "pat"}`, service.Name)
 			}
-			// Parse the credentials JSON to extract the token
-			var creds map[string]interface{}
-			if err := json.Unmarshal(credentials, &creds); err != nil {
-				return nil, fmt.Errorf("failed to parse credentials for %s: %w", service.Name, err)
-			}
-			token, ok := creds["token"].(string)
-			if !ok {
-				return nil, fmt.Errorf("invalid token format for %s", service.Name)
-			}
-			// GitHub MCP endpoint expects "Bearer" prefix for PAT
-			opts = append(opts, transport.WithHTTPHeaders(map[string]string{"Authorization": "Bearer " + token}))
-		case "oauth2.1":
-			return nil, fmt.Errorf("direct oauth2.1 for http transport not yet supported, use stdio with mcp-remote")
+			headers["Authorization"] = "Bearer " + authConfig.Token
+		case "api_key_in_header":
+			headers[authConfig.HeaderName] = authConfig.APIKey
+		case "api_key_in_url":
+			parsedURL, _ := url.Parse(urlToConnect)
+			query := parsedURL.Query()
+			query.Set(authConfig.QueryParamName, authConfig.APIKey)
+			parsedURL.RawQuery = query.Encode()
+			urlToConnect = parsedURL.String()
+		case "no_auth":
+			// No headers needed
 		default:
-			return nil, fmt.Errorf("unsupported auth type %q for service %q", service.AuthType, service.Name)
+			return nil, fmt.Errorf("unsupported auth type %q for remote service %s", service.AuthType, service.Name)
 		}
 
-		c, err = client.NewStreamableHttpClient(service.GetURL(), opts...)
+		c, err := client.NewStreamableHttpClient(urlToConnect, transport.WithHTTPHeaders(headers))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create http client for %s: %w", service.Name, err)
 		}
 
-	default:
-		return nil, fmt.Errorf("unsupported transport '%q' for service '%s'", service.GetTransport(), service.Name)
-	}
-
-	if needsStart(c) {
-		if startErr := c.Start(ctx); startErr != nil {
-			return nil, fmt.Errorf("failed to start client transport for %s: %w", service.Name, startErr)
+		// Initialize the remote client
+		initCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if needsStart(c) {
+			if startErr := c.Start(initCtx); startErr != nil {
+				return nil, fmt.Errorf("failed to start client transport for %s: %w", service.Name, startErr)
+			}
 		}
-	}
+		_, initErr := c.Initialize(initCtx, mcp.InitializeRequest{
+			Params: mcp.InitializeParams{ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION},
+		})
+		if initErr != nil {
+			c.Close()
+			return nil, fmt.Errorf("failed to initialize MCP session with %s: %w", service.Name, initErr)
+		}
+		return c, nil
 
-	initCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_, initErr := c.Initialize(initCtx, mcp.InitializeRequest{
-		Params: mcp.InitializeParams{ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION},
-	})
-	if initErr != nil {
-		c.Close()
-		return nil, fmt.Errorf("failed to initialize MCP session with %s: %w", service.Name, initErr)
-	}
+	case "local_stdio":
+		return nil, fmt.Errorf("direct local_stdio not yet supported, use sse with mcp_remote_managed")
 
-	return c, nil
+	default:
+		return nil, fmt.Errorf("unsupported or unhandled transport type: %s", service.TransportType)
+	}
 }
 
 func (gw *GatewayServer) getCredentialsForService(ctx context.Context, userID string, serviceName string) ([]byte, error) {
