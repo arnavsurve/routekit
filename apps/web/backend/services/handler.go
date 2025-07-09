@@ -42,7 +42,6 @@ type createServiceRequest struct {
 	TokenURL         string   `json:"token_url,omitempty"`
 	Scopes           []string `json:"scopes,omitempty"`
 	Audience         *string  `json:"audience,omitempty"`
-
 }
 
 // HandleGetUserServices returns all service configurations for the user
@@ -83,7 +82,6 @@ func (h *ServicesHandler) HandleGetUserServices(c echo.Context) error {
 		} else {
 			service.Scopes = []string{}
 		}
-
 
 		authConfigJSON, err := crypto.Decrypt(authConfigEncrypted)
 		if err != nil {
@@ -187,7 +185,6 @@ func (h *ServicesHandler) HandleCreateUserService(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to serialize scopes"})
 	}
 
-
 	var serviceID string
 	err = h.DBPool.QueryRow(context.Background(), `
 		INSERT INTO user_service_configs 
@@ -265,7 +262,6 @@ func (h *ServicesHandler) getUserServiceConfig(userID, serviceName string) (*con
 	} else {
 		service.Scopes = []string{}
 	}
-
 
 	authConfigJSON, err := crypto.Decrypt(authConfigEncrypted)
 	if err != nil {

@@ -124,5 +124,24 @@ CREATE TABLE user_service_configs (
 	}
 	log.Println("User service configs table is ready.")
 
+	_, err = conn.Exec(context.Background(), `
+DROP TABLE IF EXISTS user_llm_configs CASCADE;
+CREATE TABLE user_llm_configs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider_type VARCHAR(50) NOT NULL,
+    api_key_encrypted BYTEA NOT NULL,
+    base_url TEXT,
+    model VARCHAR(100),
+    is_default BOOLEAN DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(user_id, provider_type)
+);
+        `)
+	if err != nil {
+		log.Fatalf("Failed to create user_llm_configs table: %v\n", err)
+	}
+	log.Println("User LLM configs table is ready.")
+
 	log.Println("Migration completed successfully.")
 }

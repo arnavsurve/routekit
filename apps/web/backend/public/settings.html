@@ -253,13 +253,25 @@
       </div>
     </div>
     <div class="container">
-      <h1>Service Configuration</h1>
-      <p>Configure the MCP services you want Routekit to connect to.</p>
+      <h1>Settings</h1>
+      <p>Configure your AI providers and MCP services.</p>
       <div class="content-wrapper">
         <div class="services-container">
+          <!-- LLM Providers Section -->
           <div class="card">
             <div class="card-header">
-              <h2>Your Services</h2>
+              <h2>AI Providers</h2>
+              <button class="btn" onclick="openAddLLMModal()">
+                + Add Provider
+              </button>
+            </div>
+            <div id="llm-configs-list"><p>Loading AI providers...</p></div>
+          </div>
+
+          <!-- MCP Services Section -->
+          <div class="card">
+            <div class="card-header">
+              <h2>MCP Services</h2>
               <button class="btn" onclick="openAddServiceModal()">
                 + Add Service
               </button>
@@ -444,6 +456,78 @@
       </div>
     </div>
 
+    <!-- Add LLM Provider Modal -->
+    <div id="addLLMModal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Add AI Provider</h2>
+          <span class="close" onclick="closeAddLLMModal()">×</span>
+        </div>
+        <form id="llm-form">
+          <div class="form-group">
+            <label for="provider-type">Provider Type</label>
+            <select id="provider-type" name="provider_type" required>
+              <option value="">Select provider...</option>
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="openai">OpenAI (GPT)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="api-key">API Key</label>
+            <input
+              type="password"
+              id="api-key"
+              name="api_key"
+              required
+              placeholder="Enter your API key"
+            />
+          </div>
+          <div class="form-group">
+            <label for="base-url">Base URL (optional)</label>
+            <input
+              type="url"
+              id="base-url"
+              name="base_url"
+              placeholder="Custom endpoint (e.g., Azure OpenAI)"
+            />
+          </div>
+          <div class="form-group">
+            <label for="model">Model (optional)</label>
+            <input
+              type="text"
+              id="model"
+              name="model"
+              placeholder="Default model to use"
+            />
+          </div>
+          <div class="form-group">
+            <label style="display: flex; align-items: center; gap: 8px;">
+              <input
+                type="checkbox"
+                id="is-default"
+                name="is_default"
+                style="width: auto;"
+              />
+              Set as default provider
+            </label>
+          </div>
+          <div style="text-align: right; margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end;">
+            <button type="button" onclick="testLLMConfig()" class="btn btn-success">
+              Test Configuration
+            </button>
+            <button
+              type="button"
+              onclick="closeAddLLMModal()"
+            >
+              Cancel
+            </button>
+            <button type="submit" class="btn">Save Provider</button>
+          </div>
+        </form>
+        <div id="test-results" style="margin-top: 15px; display: none;"></div>
+      </div>
+    </div>
+
     <script>
       const transportSelect = document.getElementById("transport-type");
       const authSelect = document.getElementById("auth-type");
@@ -451,6 +535,7 @@
       document.addEventListener("DOMContentLoaded", async () => {
         try {
           await checkAuth();
+          await loadLLMConfigs();
           await loadServices();
           transportSelect.addEventListener("change", updateFormVisibility);
           authSelect.addEventListener("change", updateFormVisibility);
@@ -459,6 +544,192 @@
           // checkAuth handles redirect
         }
       });
+
+      // LLM Provider Management Functions
+      async function loadLLMConfigs() {
+        const configsList = document.getElementById("llm-configs-list");
+        try {
+          const response = await fetch("/api/user/llm-config");
+          if (!response.ok) throw new Error("Failed to load LLM configurations");
+
+          const data = await response.json();
+          const configs = data.configs || [];
+
+          configsList.innerHTML = "";
+          if (configs.length === 0) {
+            configsList.innerHTML =
+              '<p>No AI providers configured yet. Click "Add Provider" to get started.</p>';
+            return;
+          }
+
+          configs.forEach((config) => {
+            const providerName = config.provider_type === 'anthropic' ? 'Anthropic (Claude)' : 'OpenAI (GPT)';
+            const defaultBadge = config.is_default ? '<span style="background: #28a745; color: white; padding: 2px 6px; border-radius: 3px; font-size: 12px; margin-left: 8px;">Default</span>' : '';
+            
+            const configHtml = `
+              <div class="service-item">
+                <div class="service-header">
+                  <h3>${providerName}${defaultBadge}</h3>
+                  <div style="display: flex; gap: 8px;">
+                    ${!config.is_default ? `<button class="btn btn-success" onclick="setDefaultProvider('${config.id}')">Set Default</button>` : ''}
+                    <button class="btn btn-danger" onclick="deleteLLMConfig('${config.id}')">Delete</button>
+                  </div>
+                </div>
+                <div class="service-details">
+                  <div><strong>Provider:</strong> ${config.provider_type}</div>
+                  ${config.model ? `<div><strong>Model:</strong> ${config.model}</div>` : ""}
+                  ${config.base_url ? `<div><strong>Base URL:</strong> ${config.base_url}</div>` : ""}
+                  <div><strong>Created:</strong> ${new Date(config.created_at).toLocaleDateString()}</div>
+                </div>
+              </div>`;
+            configsList.insertAdjacentHTML("beforeend", configHtml);
+          });
+        } catch (error) {
+          configsList.innerHTML =
+            "<p>Error loading AI providers: " + error.message + "</p>";
+        }
+      }
+
+      function openAddLLMModal() {
+        document.getElementById("llm-form").reset();
+        document.getElementById("test-results").style.display = "none";
+        document.getElementById("addLLMModal").style.display = "block";
+      }
+
+      function closeAddLLMModal() {
+        document.getElementById("addLLMModal").style.display = "none";
+      }
+
+      document.getElementById("llm-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        const llmData = {
+          provider_type: formData.get("provider_type"),
+          api_key: formData.get("api_key"),
+          base_url: formData.get("base_url") || "",
+          model: formData.get("model") || "",
+          is_default: formData.get("is_default") === "on"
+        };
+
+        try {
+          const response = await fetch("/api/user/llm-config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(llmData),
+          });
+          
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || "Failed to add provider");
+          }
+          
+          showMessage("AI provider added successfully!", "success");
+          closeAddLLMModal();
+          await loadLLMConfigs();
+        } catch (error) {
+          showMessage("Error adding provider: " + error.message, "error");
+        }
+      });
+
+      async function testLLMConfig() {
+        const form = document.getElementById("llm-form");
+        const formData = new FormData(form);
+        const testData = {
+          provider_type: formData.get("provider_type"),
+          api_key: formData.get("api_key"),
+          base_url: formData.get("base_url") || "",
+          model: formData.get("model") || ""
+        };
+
+        if (!testData.provider_type || !testData.api_key) {
+          showMessage("Please fill in provider type and API key first", "error");
+          return;
+        }
+
+        const testButton = document.querySelector('button[onclick="testLLMConfig()"]');
+        const originalText = testButton.textContent;
+        testButton.textContent = "Testing...";
+        testButton.disabled = true;
+
+        try {
+          const response = await fetch("/api/user/llm-config/test", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(testData),
+          });
+
+          const result = await response.json();
+          const resultsDiv = document.getElementById("test-results");
+          
+          if (result.success) {
+            resultsDiv.innerHTML = `
+              <div style="background: #d4edda; color: #155724; padding: 10px; border-radius: 4px;">
+                <strong>✅ Test Successful!</strong><br>
+                <div style="margin-top: 8px; font-size: 14px;">
+                  <strong>Test Response:</strong> ${result.test_response}<br>
+                  <strong>Usage:</strong> ${result.usage.input_tokens} input, ${result.usage.output_tokens} output tokens<br>
+                  <strong>Supported Models:</strong> ${result.supported_models.join(', ')}
+                </div>
+              </div>`;
+          } else {
+            resultsDiv.innerHTML = `
+              <div style="background: #f8d7da; color: #721c24; padding: 10px; border-radius: 4px;">
+                <strong>❌ Test Failed</strong><br>
+                <div style="margin-top: 8px; font-size: 14px;">${result.error}</div>
+              </div>`;
+          }
+          resultsDiv.style.display = "block";
+        } catch (error) {
+          const resultsDiv = document.getElementById("test-results");
+          resultsDiv.innerHTML = `
+            <div style="background: #f8d7da; color: #721c24; padding: 10px; border-radius: 4px;">
+              <strong>❌ Test Failed</strong><br>
+              <div style="margin-top: 8px; font-size: 14px;">${error.message}</div>
+            </div>`;
+          resultsDiv.style.display = "block";
+        } finally {
+          testButton.textContent = originalText;
+          testButton.disabled = false;
+        }
+      }
+
+      async function setDefaultProvider(configId) {
+        try {
+          const response = await fetch(`/api/user/llm-config/${configId}/default`, {
+            method: "PUT",
+          });
+          
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || "Failed to set default provider");
+          }
+          
+          showMessage("Default provider updated successfully!", "success");
+          await loadLLMConfigs();
+        } catch (error) {
+          showMessage("Error setting default provider: " + error.message, "error");
+        }
+      }
+
+      async function deleteLLMConfig(configId) {
+        if (!confirm("Are you sure you want to delete this AI provider configuration?")) return;
+        
+        try {
+          const response = await fetch(`/api/user/llm-config/${configId}`, {
+            method: "DELETE",
+          });
+          
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || "Failed to delete provider");
+          }
+          
+          showMessage("AI provider deleted successfully!", "success");
+          await loadLLMConfigs();
+        } catch (error) {
+          showMessage("Error deleting provider: " + error.message, "error");
+        }
+      }
 
       function updateFormVisibility() {
         const transportType = transportSelect.value;

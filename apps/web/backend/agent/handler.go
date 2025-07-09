@@ -7,10 +7,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/arnavsurve/routekit/pkg/llm"
+	"github.com/arnavsurve/routekit/pkg/llm/providers"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
@@ -23,11 +25,11 @@ const gatewayURL = "http://localhost:8080/mcp"
 var upgrader = websocket.Upgrader{}
 
 type SessionHandler struct {
-	gatewayClient   *client.Client
-	anthropicClient anthropic.Client
-	conversation    []anthropic.MessageParam
-	systemPrompt    string
-	userJWT         string
+	gatewayClient *client.Client
+	llmProvider   llm.Provider
+	conversation  []llm.Message
+	systemPrompt  string
+	userJWT       string
 }
 
 type WebsocketMessage struct {
@@ -50,7 +52,19 @@ type ToolResultInfo struct {
 func HandleWebSocket(c echo.Context) error {
 	user := c.Get("user").(*jwt.Token)
 
-	handler, err := newSessionHandler(user.Raw)
+	providerConfig := llm.ProviderConfig{
+		Type:   c.QueryParam("provider"),
+		APIKey: c.QueryParam("api_key"),
+		Model:  c.QueryParam("model"),
+	}
+
+	if providerConfig.Type == "" {
+		providerConfig.Type = "anthropic"
+		providerConfig.APIKey = os.Getenv("ANTHROPIC_API_KEY")
+		providerConfig.Model = "claude-3-5-sonnet-20241022"
+	}
+
+	handler, err := newSessionHandler(user.Raw, providerConfig)
 	if err != nil {
 		log.Printf("Failed to create session handler: %v\n", err)
 		return c.String(http.StatusInternalServerError, "Failed to start agent session")
@@ -65,7 +79,7 @@ func HandleWebSocket(c echo.Context) error {
 	return handler.runConversation(c, ws)
 }
 
-func newSessionHandler(userJWT string) (*SessionHandler, error) {
+func newSessionHandler(userJWT string, providerCfg llm.ProviderConfig) (*SessionHandler, error) {
 	gatewayClient, err := client.NewStreamableHttpClient(gatewayURL)
 	if err != nil {
 		return nil, fmt.Errorf("creating gateway client: %w", err)
@@ -86,13 +100,16 @@ func newSessionHandler(userJWT string) (*SessionHandler, error) {
 	}
 	log.Println("WebApp: Successfully initialized with Routekit Gateway.")
 
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		return nil, fmt.Errorf("ANTHROPIC_API_KEY environment variable is not set")
+	provider, err := providers.NewProvider(providerCfg)
+	if err != nil {
+		return nil, fmt.Errorf("creating LLM provider client: %w", err)
 	}
-	anthropicClient := anthropic.NewClient(option.WithAPIKey(apiKey))
 
-	systemPrompt := `You are Routekit, an expert AI assistant capable of getting real work done. Your goal is to help users by using the tools available to you through the Routekit Gateway.
+	systemPrompt := `You are Routekit, an expert AI assistant capable of getting real work done. Your goal is to help users by using the tools and resources available to you through the Routekit Gateway.
+
+	You have access to two types of capabilities:
+	1. **TOOLS** - For actions and operations (creating, updating, searching)
+	2. **RESOURCES** - For reading content (files, documents, data)
 
 	You MUST follow this workflow precisely:
 	
@@ -100,39 +117,44 @@ func newSessionHandler(userJWT string) (*SessionHandler, error) {
     
     2. **SELECT RELEVANT SERVICE(S):** Based on the user's request, identify the most appropriate service from the list. For example, for a coding task or Git repository operation/research, you would identify the 'GitHub' or 'BitBucket' service; for a search task, you might take note of 'Exa Web Search'.
 	
-	3.  **GET SERVICE TOOLS:** Next, call 'routekit_get_service_tools'. Provide a 'services' list containing the 'service_slug'(s) you identifed. **You MUST use the 'service_slug', not the 'display_name'**. **ONLY** retrieve tools from the service(s) that is/are explicitly relevant to the current request/conversation. You can always call this again, so be frugal with the usage of this tool. It returns ALL tools provided by a service/services, and tends to eat up conversation context quickly. Err on the side of one service per tool search unless the request involves the need for tools across services. Do not request tools for all services at once. Keep your service tools requests focused.
+	3a. **FOR ACTIONS - GET SERVICE TOOLS:** Call 'routekit_get_service_tools'. Provide a 'services' list containing the 'service_slug'(s) you identified. **You MUST use the 'service_slug', not the 'display_name'**. **ONLY** retrieve tools from the service(s) that is/are explicitly relevant to the current request/conversation.
 	
-	4.  **ANALYZE RESULTS:** From the tools returned, identify the full 'name' of the tool you need to use. This name will include a service prefix, for example: 'atlassian__createJiraIssue'.
+	3b. **FOR READING CONTENT - GET SERVICE RESOURCES:** Call 'routekit_list_resources'. Provide a 'services' list containing the 'service_slug'(s) you identified. This will show you available files, documents, and other readable content.
 	
-	5.  **EXECUTE THE TOOL:** To run the tool you found, you MUST call 'routekit_execute'.
-		- The 'tool_name' parameter for 'routekit_execute' MUST be the full name from the tools list, which is the 'service_slug' followed by two underscores and the tool's name (e.g., 'atlassian__createJiraIssue').
-		- The 'tool_args' parameter must be an object containing the arguments for that tool.
+	4a. **EXECUTE TOOLS:** To run a tool, use 'routekit_execute' with the full tool name and arguments.
 	
-	**CRITICAL INSTRUCTION:** You MUST NOT attempt to call tools like 'atlassian__createJiraIssue' directly. They can ONLY be run by passing their full name to the 'routekit_execute' tool.
+	4b. **READ RESOURCES:** To read content, use 'routekit_read_resource' with the resource URI from the resources list.
 	
-	For example, after finding the 'atlassian__createJiraIssue' tool, your next step should be to call 'routekit_execute' like this:
+	**CRITICAL INSTRUCTIONS:**
+	- You MUST NOT attempt to call external tools directly. They can ONLY be run via 'routekit_execute'.
+	- For reading files or content, always use 'routekit_list_resources' first to find available resources, then 'routekit_read_resource' to read them.
+	- Resource URIs are provided in the resources list - use them exactly as given.
+	- If a tool call fails with "is a resource, not a tool", use the resource workflow instead.
+	
+	**Example Tool Usage:**
 	{
 	  "tool_name": "routekit_execute",
 	  "tool_args": {
-		"tool_name": "atlassian__createJiraIssue",
+		"tool_name": "github__search_repositories",
 		"tool_args": {
-		  "projectKey": "TEST",
-		  "summary": "This is a test ticket",
-		  "issueTypeName": "Task"
+		  "query": "repo:owner/name"
 		}
 	  }
 	}
 	
-	If you need more information to fill in the arguments for a tool, you MUST use this same search-and-execute workflow to call other tools to find that information first.
-
-    Whenever assisting a user with a task, be sure to prompt the user to provide ALL necessary details needed for a tool call. DO NOT MAKE ASSUMPTIONS. DO NOT BE PROACTIVE. When using tools to gather information, be liberal with your searches. Try your best to gather as much information as needed to assist the user with their request. Be detailed.`
+	**Example Resource Usage:**
+	1. Call: routekit_list_resources with services: ["github"]
+	2. Find resource URI in response: "github://repos/owner/repo/contents/README.md"
+	3. Call: routekit_read_resource with resource_uri: "github://repos/owner/repo/contents/README.md"
+	
+	Whenever assisting a user with a task, be sure to prompt the user to provide ALL necessary details needed. DO NOT MAKE ASSUMPTIONS. DO NOT BE PROACTIVE. When using tools to gather information, be liberal with your searches. Try your best to gather as much information as needed to assist the user with their request. Be detailed.`
 
 	return &SessionHandler{
-		gatewayClient:   gatewayClient,
-		anthropicClient: anthropicClient,
-		conversation:    []anthropic.MessageParam{},
-		systemPrompt:    systemPrompt,
-		userJWT:         userJWT,
+		gatewayClient: gatewayClient,
+		llmProvider:   provider,
+		conversation:  []llm.Message{},
+		systemPrompt:  systemPrompt,
+		userJWT:       userJWT,
 	}, nil
 }
 
@@ -147,10 +169,15 @@ func (h *SessionHandler) runConversation(c echo.Context, ws *websocket.Conn) err
 			break
 		}
 
-		h.conversation = append(h.conversation, anthropic.NewUserMessage(anthropic.NewTextBlock(string(msg))))
+		userMessage := llm.Message{
+			Role:    "user",
+			Content: string(msg),
+		}
+		h.conversation = append(h.conversation, userMessage)
 
 		for {
-			toolUseBlocks, textResponse, err := h.runAgentTurn(c.Request().Context())
+			log.Printf("WebApp: Starting agent turn")
+			toolCalls, textResponse, err := h.runAgentTurn(c.Request().Context())
 			if err != nil {
 				log.Printf("WebApp: Agent turn error: %v", err)
 				sendWsMessage(ws, "system_error", "System", ToolResultInfo{Name: "LLM API Call", Result: err.Error(), IsError: true})
@@ -158,76 +185,115 @@ func (h *SessionHandler) runConversation(c echo.Context, ws *websocket.Conn) err
 			}
 
 			if textResponse != "" {
+				log.Printf("WebApp: Agent produced text response: %s", textResponse)
 				sendWsMessage(ws, "agent_response", "Agent", textResponse)
 			}
 
-			if len(toolUseBlocks) == 0 {
+			if len(toolCalls) == 0 {
+				log.Printf("WebApp: No tool calls requested, conversation turn complete")
 				break
 			}
 
-			toolResults := h.executeTools(c.Request().Context(), toolUseBlocks, ws)
-			h.conversation = append(h.conversation, anthropic.NewUserMessage(toolResults...))
+			log.Printf("WebApp: Agent requested %d tool calls", len(toolCalls))
+			toolResults := h.executeTools(c.Request().Context(), toolCalls, ws)
+			if len(toolResults) > 0 {
+				// Format tool results properly for the LLM
+				var formattedResults []string
+				for i, result := range toolResults {
+					if i < len(toolCalls) {
+						toolName := toolCalls[i].Name
+						formattedResults = append(formattedResults, fmt.Sprintf("Tool %s returned:\n%s", toolName, result))
+					}
+				}
+
+				toolMessage := llm.Message{
+					Role:    "user",
+					Content: "Tool execution results:\n\n" + strings.Join(formattedResults, "\n\n"),
+				}
+				h.conversation = append(h.conversation, toolMessage)
+			}
 		}
 	}
 	return nil
 }
 
-func (h *SessionHandler) runAgentTurn(ctx context.Context) ([]anthropic.ToolUseBlock, string, error) {
-	req := anthropic.MessageNewParams{
-		Model:     anthropic.ModelClaude3_5SonnetLatest,
-		Messages:  h.conversation,
-		System:    []anthropic.TextBlockParam{{Text: h.systemPrompt}},
-		MaxTokens: 4096,
-		Tools:     getMetaToolsDefinition(),
+func (h *SessionHandler) runAgentTurn(ctx context.Context) ([]llm.ToolCall, string, error) {
+	req := llm.MessageRequest{
+		Messages:     h.conversation,
+		SystemPrompt: h.systemPrompt,
+		MaxTokens:    4096,
 	}
 
-	resp, err := h.anthropicClient.Messages.New(ctx, req)
+	// IMPORTANT: Only provide meta tools to LLM providers
+	// External service tools should only be called via routekit_execute
+	mcpTools := getMetaToolsDefinition()
+
+	resp, err := h.llmProvider.SendMessageWithTools(ctx, req, convertMCPTools(mcpTools))
 	if err != nil {
-		return nil, "", fmt.Errorf("calling Anthropic API: %w", err)
+		return nil, "", fmt.Errorf("calling LLM provider: %w", err)
 	}
 
-	h.conversation = append(h.conversation, resp.ToParam())
-
-	var toolUseBlocks []anthropic.ToolUseBlock
-	var finalResponseText string
-
-	for _, block := range resp.Content {
-		switch b := block.AsAny().(type) {
-		case anthropic.TextBlock:
-			finalResponseText += b.Text
-		case anthropic.ToolUseBlock:
-			toolUseBlocks = append(toolUseBlocks, b)
+	// Validate that only meta tools are being called - filter out invalid tools
+	var validToolCalls []llm.ToolCall
+	for _, toolCall := range resp.ToolCalls {
+		if !isValidMetaTool(toolCall.Name) {
+			log.Printf("WebApp: WARNING - Agent attempted to call non-meta tool %q directly, will be replaced with error message", toolCall.Name)
+			// Create an error tool call that will be handled in executeTools
+			errorToolCall := llm.ToolCall{
+				ID:   toolCall.ID,
+				Name: "_invalid_tool_call",
+				Args: map[string]any{
+					"original_tool": toolCall.Name,
+					"error_message": fmt.Sprintf("Tool %q cannot be called directly. You must use routekit_execute to call external service tools. Please retry by calling routekit_execute with tool_name: %q and your arguments in tool_args", toolCall.Name, toolCall.Name),
+				},
+			}
+			validToolCalls = append(validToolCalls, errorToolCall)
+		} else {
+			validToolCalls = append(validToolCalls, toolCall)
 		}
 	}
 
-	return toolUseBlocks, finalResponseText, nil
+	assistantMessage := llm.Message{
+		Role:    "assistant",
+		Content: resp.Content,
+	}
+	h.conversation = append(h.conversation, assistantMessage)
+
+	return validToolCalls, resp.Content, nil
 }
 
-func (h *SessionHandler) executeTools(ctx context.Context, blocks []anthropic.ToolUseBlock, ws *websocket.Conn) []anthropic.ContentBlockParamUnion {
-	var toolResults []anthropic.ContentBlockParamUnion
+func (h *SessionHandler) executeTools(ctx context.Context, toolCalls []llm.ToolCall, ws *websocket.Conn) []string {
+	var toolResults []string
 
-	for _, block := range blocks {
-		var args map[string]any
-		if err := json.Unmarshal(block.Input, &args); err != nil {
-			log.Printf("Error parsing tool args: %v", err)
-			resultText := fmt.Sprintf("Error: could not parse arguments: %v", err)
-			sendWsMessage(ws, "system_error", "System", ToolResultInfo{Name: block.Name, Result: resultText, IsError: true})
-			toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, resultText, true))
+	log.Printf("WebApp: Executing %d tool calls", len(toolCalls))
+	for _, toolCall := range toolCalls {
+		// Handle validation error tool calls
+		if toolCall.Name == "_invalid_tool_call" {
+			originalTool := toolCall.Args["original_tool"].(string)
+			errorMessage := toolCall.Args["error_message"].(string)
+
+			log.Printf("WebApp: Processing validation error for tool %q", originalTool)
+
+			sendWsMessage(ws, "system_error", "System", ToolResultInfo{
+				Name:    originalTool,
+				Result:  errorMessage,
+				IsError: true,
+			})
+
+			toolResults = append(toolResults, errorMessage)
 			continue
 		}
+		toolNameToDisplay := toolCall.Name
+		argsBytes, _ := json.MarshalIndent(toolCall.Args, "", "  ")
+		toolArgsForDisplay := argsBytes
 
-		toolNameToDisplay := block.Name
-		toolArgsForDisplay := block.Input
-
-		if block.Name == "routekit_execute" {
-			if fqn, ok := args["tool_name"].(string); ok {
+		if toolCall.Name == "routekit_execute" {
+			if fqn, ok := toolCall.Args["tool_name"].(string); ok {
 				toolNameToDisplay = fqn
 			}
-			if toolArgs, ok := args["tool_args"]; ok {
+			if toolArgs, ok := toolCall.Args["tool_args"]; ok {
 				toolArgsForDisplay, _ = json.MarshalIndent(toolArgs, "", "  ")
 			}
-		} else {
-			toolArgsForDisplay, _ = json.MarshalIndent(block.Input, "", "  ")
 		}
 
 		sendWsMessage(ws, "tool_start", "Agent", ToolCallInfo{
@@ -236,16 +302,32 @@ func (h *SessionHandler) executeTools(ctx context.Context, blocks []anthropic.To
 		})
 
 		mcpReq := mcp.CallToolRequest{}
-		mcpReq.Params.Name = block.Name
-		mcpReq.Params.Arguments = args
+		mcpReq.Params.Name = toolCall.Name
+		mcpReq.Params.Arguments = toolCall.Args
 		mcpReq.Params.Meta = &mcp.Meta{
 			AdditionalFields: map[string]any{"jwt": h.userJWT},
 		}
+
+		// Log both display args and full args for debugging
+		fullArgsBytes, _ := json.MarshalIndent(toolCall.Args, "", "  ")
+		log.Printf("WebApp: Calling tool %q with display args: %s", toolCall.Name, string(toolArgsForDisplay))
+		log.Printf("WebApp: Full tool args: %s", string(fullArgsBytes))
 		result, err := h.gatewayClient.CallTool(ctx, mcpReq)
+
+		// Debug: Log raw result content for debugging resource parsing issues
+		if result != nil {
+			rawContent, _ := json.MarshalIndent(result, "", "  ")
+			if err != nil && strings.Contains(err.Error(), "unsupported resource type") {
+				log.Printf("WebApp: DEBUG - Raw MCP result for FAILED tool %q: %s", toolCall.Name, string(rawContent))
+			} else if toolCall.Name == "routekit_execute" {
+				log.Printf("WebApp: DEBUG - Raw MCP result for tool %q: %s", toolCall.Name, string(rawContent))
+			}
+		}
 
 		var resultText string
 		var isError bool
 		if err != nil {
+			log.Printf("WebApp: Tool %q failed with error: %v", toolCall.Name, err)
 			resultText = err.Error()
 			isError = true
 		} else if result.IsError {
@@ -257,10 +339,12 @@ func (h *SessionHandler) executeTools(ctx context.Context, blocks []anthropic.To
 			if resultText == "" {
 				resultText = "[Downstream service returned an error with no content]"
 			}
+			log.Printf("WebApp: Tool %q returned error: %s", toolCall.Name, resultText)
 			isError = true
 		} else {
 			contentBytes, jsonErr := json.MarshalIndent(result.Content, "", "  ")
 			if jsonErr != nil {
+				log.Printf("WebApp: Tool %q failed to marshal result: %v", toolCall.Name, jsonErr)
 				resultText = fmt.Sprintf("Failed to marshal result content: %v", jsonErr)
 				isError = true
 			} else {
@@ -283,10 +367,44 @@ func (h *SessionHandler) executeTools(ctx context.Context, blocks []anthropic.To
 			})
 		}
 
-		toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, resultText, isError))
+		toolResults = append(toolResults, resultText)
 	}
 
+	log.Printf("WebApp: Tool execution completed. %d tools executed", len(toolCalls))
 	return toolResults
+}
+
+// isValidMetaTool checks if a tool name is one of the allowed meta tools
+func isValidMetaTool(toolName string) bool {
+	validMetaTools := map[string]bool{
+		"routekit_get_connected_services": true,
+		"routekit_get_service_tools":      true,
+		"routekit_execute":                true,
+		"routekit_list_resources":         true,
+		"routekit_read_resource":          true,
+	}
+	return validMetaTools[toolName]
+}
+
+// convertMCPTools converts anthropic tool definitions to mcp.Tool format
+func convertMCPTools(anthropicTools []anthropic.ToolUnionParam) []mcp.Tool {
+	var mcpTools []mcp.Tool
+	for _, toolUnion := range anthropicTools {
+		if toolUnion.OfTool != nil {
+			tool := toolUnion.OfTool
+			var description string
+			if tool.Description.Valid() {
+				description = tool.Description.Value
+			}
+			mcpTool := mcp.Tool{
+				Name:        tool.Name,
+				Description: description,
+				// Note: InputSchema conversion may need adjustment based on mcp.Tool structure
+			}
+			mcpTools = append(mcpTools, mcpTool)
+		}
+	}
+	return mcpTools
 }
 
 func getMetaToolsDefinition() []anthropic.ToolUnionParam {
@@ -337,10 +455,45 @@ func getMetaToolsDefinition() []anthropic.ToolUnionParam {
 		},
 	}
 
+	listResourcesTool := anthropic.ToolParam{
+		Name:        "routekit_list_resources",
+		Description: anthropic.String("Lists available resources (like files, documents) from specified services."),
+		InputSchema: anthropic.ToolInputSchemaParam{
+			Type: "object",
+			Properties: map[string]any{
+				"services": map[string]any{
+					"type":        "array",
+					"description": "A list of service names to get resources from.",
+					"items": map[string]any{
+						"type": "string",
+					},
+				},
+			},
+			Required: []string{"services"},
+		},
+	}
+
+	readResourceTool := anthropic.ToolParam{
+		Name:        "routekit_read_resource",
+		Description: anthropic.String("Reads the content of a specific resource by its URI."),
+		InputSchema: anthropic.ToolInputSchemaParam{
+			Type: "object",
+			Properties: map[string]any{
+				"resource_uri": map[string]any{
+					"type":        "string",
+					"description": "The resource URI from the resources list.",
+				},
+			},
+			Required: []string{"resource_uri"},
+		},
+	}
+
 	return []anthropic.ToolUnionParam{
 		{OfTool: &getServicesTool},
 		{OfTool: &getServiceToolsTool},
 		{OfTool: &executeTool},
+		{OfTool: &listResourcesTool},
+		{OfTool: &readResourceTool},
 	}
 }
 

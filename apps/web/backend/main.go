@@ -6,6 +6,7 @@ import (
 
 	"github.com/arnavsurve/routekit/apps/web/backend/agent"
 	"github.com/arnavsurve/routekit/apps/web/backend/auth"
+	"github.com/arnavsurve/routekit/apps/web/backend/llm"
 	"github.com/arnavsurve/routekit/apps/web/backend/services"
 	"github.com/arnavsurve/routekit/pkg/crypto"
 	"github.com/arnavsurve/routekit/pkg/db"
@@ -40,6 +41,9 @@ func main() {
 	servicesHandler := &services.ServicesHandler{
 		DBPool: db.GetPool(),
 	}
+	llmHandler := &llm.LLMHandler{
+		DBPool: db.GetPool(),
+	}
 
 	e := echo.New()
 	e.Use(middleware.Logger())
@@ -64,9 +68,16 @@ func main() {
 	api.POST("/user/services", servicesHandler.HandleCreateUserService)
 	api.DELETE("/user/services/:id", servicesHandler.HandleDeleteUserService)
 
+	// User LLM configuration routes
+	api.GET("/user/llm-config", llmHandler.HandleGetLLMConfig)
+	api.POST("/user/llm-config", llmHandler.HandleSetLLMConfig)
+	api.DELETE("/user/llm-config/:id", llmHandler.HandleDeleteLLMConfig)
+	api.PUT("/user/llm-config/:id/default", llmHandler.HandleSetDefaultLLMConfig)
+	api.POST("/user/llm-config/test", llmHandler.HandleTestLLMConfig)
+
 	// Generic Connector routes
 	api.POST("/connectors/:service/token", servicesHandler.HandleTokenConnect) // For PAT/API Key
-	api.GET("/connectors/:service/oauth", servicesHandler.HandleOAuthConnect) // For OAuth redirects
+	api.GET("/connectors/:service/oauth", servicesHandler.HandleOAuthConnect)  // For OAuth redirects
 	api.DELETE("/connectors/:service", servicesHandler.HandleDisconnect)
 	api.GET("/connectors/status", servicesHandler.HandleGetAllStatuses)
 
@@ -79,3 +90,4 @@ func main() {
 	log.Println("Starting webapp server on http://localhost:3000")
 	e.Logger.Fatal(e.Start(":3000"))
 }
+
