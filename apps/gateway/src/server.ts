@@ -4,6 +4,13 @@ import cors from 'cors';
 import { closeDbConnection } from '@/services/discovery';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp';
+import { randomUUID } from 'crypto';
+
+export interface AppContext {
+  env: {
+    JWT_SECRET: string;
+  };
+}
 
 const app = express();
 
@@ -19,6 +26,23 @@ const HOST = process.env.HOST || '0.0.0.0';
 
 app.use(express.json());
 app.use(cors());
+
+app.post('/mcp', async (req, res) => {
+  const sessionId = (req.headers['x-session-id'] as string) || randomUUID();
+
+  let transport = transports.get(sessionId);
+  if (!transport) {
+    transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => sessionId,
+      onsessioninitialized: (sessionId) => console.log(`MCP session ${sessionId} initialized.`),
+    });
+    transports.set(sessionId, transport);
+
+    await mcpServer.connect(transport);
+  }
+
+  transport.handleRequest(req, res, req.body);
+});
 
 app.get('/health', (req, res) => {
   res.status(200).send('Gateway is healthy!');
