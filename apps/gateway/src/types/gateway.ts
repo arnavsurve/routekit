@@ -1,5 +1,7 @@
 // --- Service configuration types (from DB) ---
 
+import { Tool } from '@modelcontextprotocol/sdk/types';
+
 export interface ServiceConfig {
   id: string;
   userId: string;
@@ -8,6 +10,7 @@ export interface ServiceConfig {
   transportType: TransportType;
   mcpServerUrl?: string | undefined;
   authType: AuthType;
+  authConfig: AuthConfig;
   scopes: string[];
   audience?: string | undefined;
 }
@@ -69,12 +72,6 @@ export interface AuthenticatedRequest {
 
 // --- MCP types (extending SDK types) ---
 
-export interface MCPTool {
-  name: string;
-  description?: string;
-  inputSchema: Record<string, any>;
-}
-
 export interface MCPResource {
   uri: string;
   name?: string;
@@ -116,7 +113,7 @@ export interface ServicesResponse {
 }
 
 export interface ToolsResponse {
-  tools: MCPTool[];
+  tools: Tool[];
 }
 
 export interface ResourcesResponse {
